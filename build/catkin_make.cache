@@ -1,2 +1,0 @@
-double_urdf_1115:myarm_moveit_configuration
--DCATKIN_DEVEL_PREFIX=/home/night/Desktop/catkin_ws/devel -DCMAKE_INSTALL_PREFIX=/home/night/Desktop/catkin_ws/install -G Unix Makefiles

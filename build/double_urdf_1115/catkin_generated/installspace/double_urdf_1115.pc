@@ -1,8 +1,0 @@
-prefix=/home/night/Desktop/catkin_ws/install
-
-Name: double_urdf_1115
-Description: Description of double_urdf_1115
-Version: 1.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: 
