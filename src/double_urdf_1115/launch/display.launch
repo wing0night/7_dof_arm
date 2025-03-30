@@ -1,0 +1,31 @@
+<launch>
+  <arg
+    name="model" />
+  <param
+    name="robot_description"
+    textfile="$(find double_urdf_1115)/urdf/model.urdf" />
+  <node
+    name="joint_state_publisher_gui"
+    pkg="joint_state_publisher_gui"
+    type="joint_state_publisher_gui" />
+  <node
+    name="robot_state_publisher"
+    pkg="robot_state_publisher"
+    type="robot_state_publisher" />
+  <!-- 新增的关节角度监听节点 -->
+  <!-- <node
+    name="joint_angle_listener"
+    pkg="double_urdf_1115"
+    type="joint_angle_listener.py"
+    output="screen" /> -->
+  <node
+    name="v_a_plot"
+    pkg="double_urdf_1115"
+    type="v_a_plot.py"
+    output="screen" />
+  <node
+    name="rviz"
+    pkg="rviz"
+    type="rviz"
+    args="-d $(find double_urdf_1115)/1.rviz" />
+</launch>

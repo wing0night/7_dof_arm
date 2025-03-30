@@ -1,0 +1,8 @@
+prefix=/home/night/Desktop/catkin_ws/devel
+
+Name: myarm_moveit_configuration
+Description: Description of myarm_moveit_configuration
+Version: 0.3.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
