@@ -245,7 +245,7 @@ class LM_ik_solver():
         all_velocities = []
         for joint_idx in range(7):  # 固定处理7个关节
             # 使用梯形插值生成轨迹
-            positions, velocities, _ = self.trapezoidal_interpolation(
+            positions, velocities, _ = self.quintic_interpolation(
                 start=start_positions[joint_idx],
                 goal=goal_positions[joint_idx],
                 duration=duration,
@@ -318,6 +318,8 @@ class LM_ik_solver():
         # 等待动作执行完成
         if not self.arm_client.wait_for_result(rospy.Duration(duration+1)):
             rospy.logwarn("轨迹执行超时")
+        
+        self.current_joint_positions = goal_positions  # 解除注释此行
 
     def _update_current_position(self, status, result, target_positions):
         """处理动作执行完成回调"""
@@ -385,8 +387,8 @@ x = 0.5
 y = 0.2
 z = 0.5
 R_custom = np.array([
-    [1, 0, 0],
     [0, -1, 0],
+    [1, 0, 0],
     [0, 0, 1]
 ])
 # R_custom = np.array([
