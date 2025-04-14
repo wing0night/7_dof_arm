@@ -1,0 +1,2 @@
+franka-emika-panda-robot/franka_h2
+-DCATKIN_DEVEL_PREFIX=/home/night/Desktop/franka/devel -DCMAKE_INSTALL_PREFIX=/home/night/Desktop/franka/install -G Unix Makefiles
