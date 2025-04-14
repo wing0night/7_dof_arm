@@ -58,19 +58,35 @@ class LM_ik_solver():
         self.current_joint_positions = msg.position
     
     def _load_inertia_params(self):
-        """从URDF中提取关节对应的惯性矩"""
-        inertia_dict = {}
+        """从URDF中提取完整的惯性参数（质量、转动惯量矩阵、质心位置）"""
+        inertia_params = {}
         for name in self.joint_names:
             for joint in self.robot.joints:
                 if joint.name == name:
                     child_link = self.robot.link_map[joint.child]
                     if child_link.inertial:
-                        # 获取惯性矩阵（这里简化为绕关节轴的转动惯量）
+                        # 提取质量
+                        mass = child_link.inertial.mass
+                        
+                        # 提取完整转动惯量矩阵
                         inertia = child_link.inertial.inertia
-                        # 假设关节绕Z轴旋转，取izz分量
-                        inertia_dict[name] = inertia.izz
+                        inertia_matrix = [
+                            [inertia.ixx, inertia.ixy, inertia.ixz],
+                            [inertia.ixy, inertia.iyy, inertia.iyz],
+                            [inertia.ixz, inertia.iyz, inertia.izz]
+                        ]
+                        
+                        # 提取质心位置（相对于关节坐标系）
+                        origin = child_link.inertial.origin
+                        com_position = origin.xyz if origin else [0,0,0]
+                        
+                        inertia_params[name] = {
+                            'mass': mass,
+                            'inertia_matrix': inertia_matrix,
+                            'com_position': com_position
+                        }
                     break
-        return inertia_dict
+        return inertia_params
 
     def quintic_interpolation(self, start, goal, duration, freq=50):
         """五次多项式插值"""
@@ -127,6 +143,36 @@ class LM_ik_solver():
             velocities.append(phase_vel)
         
         return positions, velocities, t
+    
+    def calculate_gravity_torques(self):
+        """计算各关节重力矩（返回字典形式）"""
+        g = 9.81  # 重力加速度
+        gravity_torques = {}  # 使用字典存储结果
+        
+        for joint_name in self.joint_names:
+            # 获取关节参数
+            params = self.inertia_params.get(joint_name)
+            if not params:
+                rospy.logwarn(f"未找到关节 {joint_name} 的惯性参数")
+                continue
+                
+            # 解包参数
+            mass = params['mass']
+            com = np.array(params['com_position'])
+            
+            # 基坐标系重力矢量（可根据实际坐标系方向调整）
+            base_gravity = np.array([0, 0, -g])  
+            
+            # 简化的坐标系转换（假设关节坐标系与基坐标系对齐）
+            joint_gravity = base_gravity  # 实际需用变换矩阵转换
+            
+            # 计算力矩 τ = r × F
+            torque_vector = np.cross(com, mass * joint_gravity)
+            
+            # 存储Z轴分量（假设关节绕Z轴旋转）
+            gravity_torques[joint_name] = torque_vector[2]  # 单位：Nm
+            
+        return gravity_torques
 
     def move_to_goal(self, goal_positions, duration=5.0):
         if self.current_joint_positions is None:
@@ -136,13 +182,17 @@ class LM_ik_solver():
         num_points = int(duration * 50)
         timestamps = np.linspace(0, duration, num_points)
 
+        gravity_torques = self.calculate_gravity_torques()
+
+        g = 9.81
+
         # 存储插值数据
         all_positions = []
         all_velocities = []
         for joint_idx in range(len(goal_positions)):
             start = self.current_joint_positions[joint_idx]
             goal = goal_positions[joint_idx]
-            positions, velocities, _ = self.quintic_interpolation(start, goal, duration, 50)
+            positions, velocities, _ = self.trapezoidal_interpolation(start, goal, duration, 50)
             all_positions.append(positions)
             all_velocities.append(velocities)
 
@@ -180,9 +230,33 @@ class LM_ik_solver():
             else:
                 accelerations = [0.0]*len(self.joint_names)
             
+            target_msg.acc = accelerations  # 直接赋值计算结果
+
+            
+
+            # 力矩计算部分
+            for name in self.joint_names:  # 按joint_names顺序遍历
+                # 获取当前关节参数
+                params = self.inertia_params[name]
+                
+                # 获取对应的加速度（按索引匹配顺序）
+                j = self.joint_names.index(name)
+                acc = accelerations[j]
+                
+                # 获取当前关节重力矩
+                grav = gravity_torques[name]
+                
+                # 计算惯性力矩 + 重力补偿
+                inertia_torque = np.dot(params['inertia_matrix'], [0, 0, acc])[2]  # 取绕Z轴分量
+                total_torque = inertia_torque + grav
+                
+                target_msg.torques.append(total_torque)
+
             # 计算力矩（τ = Iα 的简化模型）
-            target_msg.torques = [self.inertia_params[name] * acc for name, acc 
-                                in zip(self.joint_names, accelerations)]
+            # target_msg.torques = [self.inertia_params[name] * acc for name, acc 
+            #                     in zip(self.joint_names, accelerations)]
+            
+            
 
             # 更新时间记录
             self.prev_velocities = current_velocities

@@ -17,6 +17,7 @@ class JointStateLogger:
         self.time_data = []
         self.velocity_data = {f'joint{i+1}': [] for i in range(7)}
         self.torque_data = {f'joint{i+1}': [] for i in range(7)}  # 新增扭矩数据存储
+        self.acc_data = {f'joint{i+1}': [] for i in range(7)}  # 新增加速度数据存储
         self.joint_names = []
         
         # 订阅话题
@@ -38,38 +39,50 @@ class JointStateLogger:
                 # 同时记录速度和扭矩
                 self.velocity_data[name].append(msg.velocities[idx])
                 self.torque_data[name].append(msg.torques[idx])  # 假设消息已包含torques字段
+                self.acc_data[name].append(msg.acc[idx])
             except (ValueError, IndexError) as e:
                 self.velocity_data[name].append(0.0)
                 self.torque_data[name].append(0.0)
+                self.acc_data[name].append(0.0)
 
     def save_plots(self):
         # 转换为相对时间
         time_array = np.array(self.time_data) - self.time_data[0]
         
-        # 创建双列画布
-        plt.figure(figsize=(20, 25))
+        # 创建3列画布
+        plt.figure(figsize=(30, 35))
         
         for i, (name, velocities) in enumerate(self.velocity_data.items(), 1):  # 从1开始计数
             # 速度子图（左列）
-            plt.subplot(7, 2, 2*i-1)
+            plt.subplot(7, 3, 3*i-2)
             plt.plot(time_array, velocities, 'b')
             plt.ylabel('Velocity (rad/s)')
             plt.title(f'Joint {name[-1]} Velocity')
             plt.grid(True)
             if i != 7: plt.xticks([])
             
+            # jiasudu子图（右列）
+            plt.subplot(7, 3, 3*i-1)
+            plt.plot(time_array, self.acc_data[name], 'r')
+            plt.ylabel('Acceleration (Nm)')
+            plt.title(f'Joint {name[-1]} Acceleration')            
+            plt.grid(True)
+            if i != 7: plt.xticks([])
+
             # 力矩子图（右列）
-            plt.subplot(7, 2, 2*i)
-            plt.plot(time_array, self.torque_data[name], 'r')
+            plt.subplot(7, 3, 3*i)
+            plt.plot(time_array, self.torque_data[name], 'g')
             plt.ylabel('Torque (Nm)')
             plt.title(f'Joint {name[-1]} Torque')
             plt.grid(True)
             if i != 7: plt.xticks([])
         
         # 设置公共标签
-        plt.subplot(7,2,13)  # 最下方左侧
+        plt.subplot(7,3,19)  # 最下方左侧
         plt.xlabel('Time (s)')
-        plt.subplot(7,2,14)  # 最下方右侧 
+        plt.subplot(7,3,20)  # 最下方右侧 
+        plt.xlabel('Time (s)')
+        plt.subplot(7,3,21)  # 最下方右侧 
         plt.xlabel('Time (s)')
         
         plt.tight_layout()
