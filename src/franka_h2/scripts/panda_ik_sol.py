@@ -14,7 +14,7 @@ import numpy as np
 
 import roboticstoolbox as rtb
 
-
+import sys
 
 
 def move_robot_arm(joint_values):
