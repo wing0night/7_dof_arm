@@ -5,6 +5,8 @@
           POSITIONS
           VELOCITIES-VAL
           VELOCITIES
+          TORQUES-VAL
+          TORQUES
           STAMP-VAL
           STAMP
 ))

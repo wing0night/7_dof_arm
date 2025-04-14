@@ -27,12 +27,14 @@ struct TrajectoryData_
     : joint_names()
     , positions()
     , velocities()
+    , torques()
     , stamp()  {
     }
   TrajectoryData_(const ContainerAllocator& _alloc)
     : joint_names(_alloc)
     , positions(_alloc)
     , velocities(_alloc)
+    , torques(_alloc)
     , stamp()  {
   (void)_alloc;
     }
@@ -47,6 +49,9 @@ struct TrajectoryData_
 
    typedef std::vector<double, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<double>> _velocities_type;
   _velocities_type velocities;
+
+   typedef std::vector<double, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<double>> _torques_type;
+  _torques_type torques;
 
    typedef ros::Time _stamp_type;
   _stamp_type stamp;
@@ -83,6 +88,7 @@ bool operator==(const ::franka_h2::TrajectoryData_<ContainerAllocator1> & lhs, c
   return lhs.joint_names == rhs.joint_names &&
     lhs.positions == rhs.positions &&
     lhs.velocities == rhs.velocities &&
+    lhs.torques == rhs.torques &&
     lhs.stamp == rhs.stamp;
 }
 
@@ -140,12 +146,12 @@ struct MD5Sum< ::franka_h2::TrajectoryData_<ContainerAllocator> >
 {
   static const char* value()
   {
-    return "4fd91ba6a794e307aefbfd0f95764a4e";
+    return "f137a938aa3a1c7bf0c5b969f6d8d555";
   }
 
   static const char* value(const ::franka_h2::TrajectoryData_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0x4fd91ba6a794e307ULL;
-  static const uint64_t static_value2 = 0xaefbfd0f95764a4eULL;
+  static const uint64_t static_value1 = 0xf137a938aa3a1c7bULL;
+  static const uint64_t static_value2 = 0xf0c5b969f6d8d555ULL;
 };
 
 template<class ContainerAllocator>
@@ -167,6 +173,7 @@ struct Definition< ::franka_h2::TrajectoryData_<ContainerAllocator> >
     return "string[] joint_names\n"
 "float64[] positions\n"
 "float64[] velocities\n"
+"float64[] torques\n"
 "time stamp\n"
 ;
   }
@@ -189,6 +196,7 @@ namespace serialization
       stream.next(m.joint_names);
       stream.next(m.positions);
       stream.next(m.velocities);
+      stream.next(m.torques);
       stream.next(m.stamp);
     }
 
@@ -225,6 +233,12 @@ struct Printer< ::franka_h2::TrajectoryData_<ContainerAllocator> >
     {
       s << indent << "  velocities[" << i << "]: ";
       Printer<double>::stream(s, indent + "  ", v.velocities[i]);
+    }
+    s << indent << "torques[]" << std::endl;
+    for (size_t i = 0; i < v.torques.size(); ++i)
+    {
+      s << indent << "  torques[" << i << "]: ";
+      Printer<double>::stream(s, indent + "  ", v.torques[i]);
     }
     s << indent << "stamp: ";
     Printer<ros::Time>::stream(s, indent + "  ", v.stamp);

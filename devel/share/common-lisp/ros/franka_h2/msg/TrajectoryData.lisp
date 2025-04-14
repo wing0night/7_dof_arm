@@ -22,6 +22,11 @@
     :initarg :velocities
     :type (cl:vector cl:float)
    :initform (cl:make-array 0 :element-type 'cl:float :initial-element 0.0))
+   (torques
+    :reader torques
+    :initarg :torques
+    :type (cl:vector cl:float)
+   :initform (cl:make-array 0 :element-type 'cl:float :initial-element 0.0))
    (stamp
     :reader stamp
     :initarg :stamp
@@ -51,6 +56,11 @@
 (cl:defmethod velocities-val ((m <TrajectoryData>))
   (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader franka_h2-msg:velocities-val is deprecated.  Use franka_h2-msg:velocities instead.")
   (velocities m))
+
+(cl:ensure-generic-function 'torques-val :lambda-list '(m))
+(cl:defmethod torques-val ((m <TrajectoryData>))
+  (roslisp-msg-protocol:msg-deprecation-warning "Using old-style slot reader franka_h2-msg:torques-val is deprecated.  Use franka_h2-msg:torques instead.")
+  (torques m))
 
 (cl:ensure-generic-function 'stamp-val :lambda-list '(m))
 (cl:defmethod stamp-val ((m <TrajectoryData>))
@@ -100,6 +110,21 @@
     (cl:write-byte (cl:ldb (cl:byte 8 48) bits) ostream)
     (cl:write-byte (cl:ldb (cl:byte 8 56) bits) ostream)))
    (cl:slot-value msg 'velocities))
+  (cl:let ((__ros_arr_len (cl:length (cl:slot-value msg 'torques))))
+    (cl:write-byte (cl:ldb (cl:byte 8 0) __ros_arr_len) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 8) __ros_arr_len) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 16) __ros_arr_len) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 24) __ros_arr_len) ostream))
+  (cl:map cl:nil #'(cl:lambda (ele) (cl:let ((bits (roslisp-utils:encode-double-float-bits ele)))
+    (cl:write-byte (cl:ldb (cl:byte 8 0) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 8) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 16) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 24) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 32) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 40) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 48) bits) ostream)
+    (cl:write-byte (cl:ldb (cl:byte 8 56) bits) ostream)))
+   (cl:slot-value msg 'torques))
   (cl:let ((__sec (cl:floor (cl:slot-value msg 'stamp)))
         (__nsec (cl:round (cl:* 1e9 (cl:- (cl:slot-value msg 'stamp) (cl:floor (cl:slot-value msg 'stamp)))))))
     (cl:write-byte (cl:ldb (cl:byte 8 0) __sec) ostream)
@@ -165,6 +190,24 @@
       (cl:setf (cl:ldb (cl:byte 8 48) bits) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 56) bits) (cl:read-byte istream))
     (cl:setf (cl:aref vals i) (roslisp-utils:decode-double-float-bits bits))))))
+  (cl:let ((__ros_arr_len 0))
+    (cl:setf (cl:ldb (cl:byte 8 0) __ros_arr_len) (cl:read-byte istream))
+    (cl:setf (cl:ldb (cl:byte 8 8) __ros_arr_len) (cl:read-byte istream))
+    (cl:setf (cl:ldb (cl:byte 8 16) __ros_arr_len) (cl:read-byte istream))
+    (cl:setf (cl:ldb (cl:byte 8 24) __ros_arr_len) (cl:read-byte istream))
+  (cl:setf (cl:slot-value msg 'torques) (cl:make-array __ros_arr_len))
+  (cl:let ((vals (cl:slot-value msg 'torques)))
+    (cl:dotimes (i __ros_arr_len)
+    (cl:let ((bits 0))
+      (cl:setf (cl:ldb (cl:byte 8 0) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 8) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 16) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 24) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 32) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 40) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 48) bits) (cl:read-byte istream))
+      (cl:setf (cl:ldb (cl:byte 8 56) bits) (cl:read-byte istream))
+    (cl:setf (cl:aref vals i) (roslisp-utils:decode-double-float-bits bits))))))
     (cl:let ((__sec 0) (__nsec 0))
       (cl:setf (cl:ldb (cl:byte 8 0) __sec) (cl:read-byte istream))
       (cl:setf (cl:ldb (cl:byte 8 8) __sec) (cl:read-byte istream))
@@ -185,21 +228,22 @@
   "franka_h2/TrajectoryData")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql '<TrajectoryData>)))
   "Returns md5sum for a message object of type '<TrajectoryData>"
-  "4fd91ba6a794e307aefbfd0f95764a4e")
+  "f137a938aa3a1c7bf0c5b969f6d8d555")
 (cl:defmethod roslisp-msg-protocol:md5sum ((type (cl:eql 'TrajectoryData)))
   "Returns md5sum for a message object of type 'TrajectoryData"
-  "4fd91ba6a794e307aefbfd0f95764a4e")
+  "f137a938aa3a1c7bf0c5b969f6d8d555")
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql '<TrajectoryData>)))
   "Returns full string definition for message of type '<TrajectoryData>"
-  (cl:format cl:nil "string[] joint_names~%float64[] positions~%float64[] velocities~%time stamp~%~%"))
+  (cl:format cl:nil "string[] joint_names~%float64[] positions~%float64[] velocities~%float64[] torques~%time stamp~%~%"))
 (cl:defmethod roslisp-msg-protocol:message-definition ((type (cl:eql 'TrajectoryData)))
   "Returns full string definition for message of type 'TrajectoryData"
-  (cl:format cl:nil "string[] joint_names~%float64[] positions~%float64[] velocities~%time stamp~%~%"))
+  (cl:format cl:nil "string[] joint_names~%float64[] positions~%float64[] velocities~%float64[] torques~%time stamp~%~%"))
 (cl:defmethod roslisp-msg-protocol:serialization-length ((msg <TrajectoryData>))
   (cl:+ 0
      4 (cl:reduce #'cl:+ (cl:slot-value msg 'joint_names) :key #'(cl:lambda (ele) (cl:declare (cl:ignorable ele)) (cl:+ 4 (cl:length ele))))
      4 (cl:reduce #'cl:+ (cl:slot-value msg 'positions) :key #'(cl:lambda (ele) (cl:declare (cl:ignorable ele)) (cl:+ 8)))
      4 (cl:reduce #'cl:+ (cl:slot-value msg 'velocities) :key #'(cl:lambda (ele) (cl:declare (cl:ignorable ele)) (cl:+ 8)))
+     4 (cl:reduce #'cl:+ (cl:slot-value msg 'torques) :key #'(cl:lambda (ele) (cl:declare (cl:ignorable ele)) (cl:+ 8)))
      8
 ))
 (cl:defmethod roslisp-msg-protocol:ros-message-to-list ((msg <TrajectoryData>))
@@ -208,5 +252,6 @@
     (cl:cons ':joint_names (joint_names msg))
     (cl:cons ':positions (positions msg))
     (cl:cons ':velocities (velocities msg))
+    (cl:cons ':torques (torques msg))
     (cl:cons ':stamp (stamp msg))
 ))

@@ -14,7 +14,7 @@
 
 (defclass franka_h2::TrajectoryData
   :super ros::object
-  :slots (_joint_names _positions _velocities _stamp ))
+  :slots (_joint_names _positions _velocities _torques _stamp ))
 
 (defmethod franka_h2::TrajectoryData
   (:init
@@ -22,12 +22,14 @@
     ((:joint_names __joint_names) (let (r) (dotimes (i 0) (push "" r)) r))
     ((:positions __positions) (make-array 0 :initial-element 0.0 :element-type :float))
     ((:velocities __velocities) (make-array 0 :initial-element 0.0 :element-type :float))
+    ((:torques __torques) (make-array 0 :initial-element 0.0 :element-type :float))
     ((:stamp __stamp) (instance ros::time :init))
     )
    (send-super :init)
    (setq _joint_names __joint_names)
    (setq _positions __positions)
    (setq _velocities __velocities)
+   (setq _torques __torques)
    (setq _stamp __stamp)
    self)
   (:joint_names
@@ -39,6 +41,9 @@
   (:velocities
    (&optional __velocities)
    (if __velocities (setq _velocities __velocities)) _velocities)
+  (:torques
+   (&optional __torques)
+   (if __torques (setq _torques __torques)) _torques)
   (:stamp
    (&optional __stamp)
    (if __stamp (setq _stamp __stamp)) _stamp)
@@ -51,6 +56,8 @@
     (* 8    (length _positions)) 4
     ;; float64[] _velocities
     (* 8    (length _velocities)) 4
+    ;; float64[] _torques
+    (* 8    (length _torques)) 4
     ;; time _stamp
     8
     ))
@@ -72,6 +79,11 @@
      (write-long (length _velocities) s)
      (dotimes (i (length _velocities))
        (sys::poke (elt _velocities i) (send s :buffer) (send s :count) :double) (incf (stream-count s) 8)
+       )
+     ;; float64[] _torques
+     (write-long (length _torques) s)
+     (dotimes (i (length _torques))
+       (sys::poke (elt _torques i) (send s :buffer) (send s :count) :double) (incf (stream-count s) 8)
        )
      ;; time _stamp
        (write-long (send _stamp :sec) s) (write-long (send _stamp :nsec) s)
@@ -100,23 +112,31 @@
      (dotimes (i n)
      (setf (elt _velocities i) (sys::peek buf ptr- :double)) (incf ptr- 8)
      ))
+   ;; float64[] _torques
+   (let (n)
+     (setq n (sys::peek buf ptr- :integer)) (incf ptr- 4)
+     (setq _torques (instantiate float-vector n))
+     (dotimes (i n)
+     (setf (elt _torques i) (sys::peek buf ptr- :double)) (incf ptr- 8)
+     ))
    ;; time _stamp
      (send _stamp :sec (sys::peek buf ptr- :integer)) (incf ptr- 4)  (send _stamp :nsec (sys::peek buf ptr- :integer)) (incf ptr- 4)
    ;;
    self)
   )
 
-(setf (get franka_h2::TrajectoryData :md5sum-) "4fd91ba6a794e307aefbfd0f95764a4e")
+(setf (get franka_h2::TrajectoryData :md5sum-) "f137a938aa3a1c7bf0c5b969f6d8d555")
 (setf (get franka_h2::TrajectoryData :datatype-) "franka_h2/TrajectoryData")
 (setf (get franka_h2::TrajectoryData :definition-)
       "string[] joint_names
 float64[] positions
 float64[] velocities
+float64[] torques
 time stamp
 ")
 
 
 
-(provide :franka_h2/TrajectoryData "4fd91ba6a794e307aefbfd0f95764a4e")
+(provide :franka_h2/TrajectoryData "f137a938aa3a1c7bf0c5b969f6d8d555")
 
 

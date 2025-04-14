@@ -9,15 +9,16 @@ import struct
 import genpy
 
 class TrajectoryData(genpy.Message):
-  _md5sum = "4fd91ba6a794e307aefbfd0f95764a4e"
+  _md5sum = "f137a938aa3a1c7bf0c5b969f6d8d555"
   _type = "franka_h2/TrajectoryData"
   _has_header = False  # flag to mark the presence of a Header object
   _full_text = """string[] joint_names
 float64[] positions
 float64[] velocities
+float64[] torques
 time stamp"""
-  __slots__ = ['joint_names','positions','velocities','stamp']
-  _slot_types = ['string[]','float64[]','float64[]','time']
+  __slots__ = ['joint_names','positions','velocities','torques','stamp']
+  _slot_types = ['string[]','float64[]','float64[]','float64[]','time']
 
   def __init__(self, *args, **kwds):
     """
@@ -27,7 +28,7 @@ time stamp"""
     changes.  You cannot mix in-order arguments and keyword arguments.
 
     The available fields are:
-       joint_names,positions,velocities,stamp
+       joint_names,positions,velocities,torques,stamp
 
     :param args: complete set of field values, in .msg order
     :param kwds: use keyword arguments corresponding to message field names
@@ -42,12 +43,15 @@ time stamp"""
         self.positions = []
       if self.velocities is None:
         self.velocities = []
+      if self.torques is None:
+        self.torques = []
       if self.stamp is None:
         self.stamp = genpy.Time()
     else:
       self.joint_names = []
       self.positions = []
       self.velocities = []
+      self.torques = []
       self.stamp = genpy.Time()
 
   def _get_types(self):
@@ -78,6 +82,10 @@ time stamp"""
       buff.write(_struct_I.pack(length))
       pattern = '<%sd'%length
       buff.write(struct.Struct(pattern).pack(*self.velocities))
+      length = len(self.torques)
+      buff.write(_struct_I.pack(length))
+      pattern = '<%sd'%length
+      buff.write(struct.Struct(pattern).pack(*self.torques))
       _x = self
       buff.write(_get_struct_2I().pack(_x.stamp.secs, _x.stamp.nsecs))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
@@ -125,6 +133,14 @@ time stamp"""
       s = struct.Struct(pattern)
       end += s.size
       self.velocities = s.unpack(str[start:end])
+      start = end
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      pattern = '<%sd'%length
+      start = end
+      s = struct.Struct(pattern)
+      end += s.size
+      self.torques = s.unpack(str[start:end])
       _x = self
       start = end
       end += 8
@@ -158,6 +174,10 @@ time stamp"""
       buff.write(_struct_I.pack(length))
       pattern = '<%sd'%length
       buff.write(self.velocities.tostring())
+      length = len(self.torques)
+      buff.write(_struct_I.pack(length))
+      pattern = '<%sd'%length
+      buff.write(self.torques.tostring())
       _x = self
       buff.write(_get_struct_2I().pack(_x.stamp.secs, _x.stamp.nsecs))
     except struct.error as se: self._check_types(struct.error("%s: '%s' when writing '%s'" % (type(se), str(se), str(locals().get('_x', self)))))
@@ -206,6 +226,14 @@ time stamp"""
       s = struct.Struct(pattern)
       end += s.size
       self.velocities = numpy.frombuffer(str[start:end], dtype=numpy.float64, count=length)
+      start = end
+      end += 4
+      (length,) = _struct_I.unpack(str[start:end])
+      pattern = '<%sd'%length
+      start = end
+      s = struct.Struct(pattern)
+      end += s.size
+      self.torques = numpy.frombuffer(str[start:end], dtype=numpy.float64, count=length)
       _x = self
       start = end
       end += 8

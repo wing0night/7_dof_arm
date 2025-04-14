@@ -21,6 +21,7 @@ class TrajectoryData {
       this.joint_names = null;
       this.positions = null;
       this.velocities = null;
+      this.torques = null;
       this.stamp = null;
     }
     else {
@@ -42,6 +43,12 @@ class TrajectoryData {
       else {
         this.velocities = [];
       }
+      if (initObj.hasOwnProperty('torques')) {
+        this.torques = initObj.torques
+      }
+      else {
+        this.torques = [];
+      }
       if (initObj.hasOwnProperty('stamp')) {
         this.stamp = initObj.stamp
       }
@@ -59,6 +66,8 @@ class TrajectoryData {
     bufferOffset = _arraySerializer.float64(obj.positions, buffer, bufferOffset, null);
     // Serialize message field [velocities]
     bufferOffset = _arraySerializer.float64(obj.velocities, buffer, bufferOffset, null);
+    // Serialize message field [torques]
+    bufferOffset = _arraySerializer.float64(obj.torques, buffer, bufferOffset, null);
     // Serialize message field [stamp]
     bufferOffset = _serializer.time(obj.stamp, buffer, bufferOffset);
     return bufferOffset;
@@ -74,6 +83,8 @@ class TrajectoryData {
     data.positions = _arrayDeserializer.float64(buffer, bufferOffset, null)
     // Deserialize message field [velocities]
     data.velocities = _arrayDeserializer.float64(buffer, bufferOffset, null)
+    // Deserialize message field [torques]
+    data.torques = _arrayDeserializer.float64(buffer, bufferOffset, null)
     // Deserialize message field [stamp]
     data.stamp = _deserializer.time(buffer, bufferOffset);
     return data;
@@ -86,7 +97,8 @@ class TrajectoryData {
     });
     length += 8 * object.positions.length;
     length += 8 * object.velocities.length;
-    return length + 20;
+    length += 8 * object.torques.length;
+    return length + 24;
   }
 
   static datatype() {
@@ -96,7 +108,7 @@ class TrajectoryData {
 
   static md5sum() {
     //Returns md5sum for a message object
-    return '4fd91ba6a794e307aefbfd0f95764a4e';
+    return 'f137a938aa3a1c7bf0c5b969f6d8d555';
   }
 
   static messageDefinition() {
@@ -105,6 +117,7 @@ class TrajectoryData {
     string[] joint_names
     float64[] positions
     float64[] velocities
+    float64[] torques
     time stamp
     `;
   }
@@ -134,6 +147,13 @@ class TrajectoryData {
     }
     else {
       resolved.velocities = []
+    }
+
+    if (msg.torques !== undefined) {
+      resolved.torques = msg.torques;
+    }
+    else {
+      resolved.torques = []
     }
 
     if (msg.stamp !== undefined) {
