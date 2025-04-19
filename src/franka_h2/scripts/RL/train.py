@@ -21,7 +21,6 @@ from franka_h2.msg import TrajectoryData
 # cal torque
 from urdf_parser_py.urdf import URDF
 import rospkg
-
 import os
 
 
@@ -98,17 +97,28 @@ class RobotEnv:
     def state_cb(self, msg):
         """状态回调函数"""
         # 解析关节状态：位置、速度、力矩
-        joint_pos = np.array(msg.position)
-        joint_vel = np.array(msg.velocity)
-        joint_eff = np.array(msg.effort)
+        joint_pos = np.array(msg.position[:7])  # 确保是7维
+        joint_vel = np.array(msg.velocity[:7] if msg.velocity else [0.0]*7)  # 如果没有速度信息，用0填充
+        joint_eff = np.array(msg.effort[:7] if msg.effort else [0.0]*7)  # 如果没有力矩信息，用0填充
         
-        # 获取末端执行器位置（需替换为实际正运动学计算）
-        end_effector_pos = np.zeros(3)  
+        # 获取末端执行器位置（使用正运动学计算）
+        # 创建Panda机器人模型
+        panda = rtb.models.URDF.Panda()
+        # 计算末端执行器位置
+        T = panda.fkine(joint_pos)
+        end_effector_pos = np.array([T.t[0], T.t[1], T.t[2]])
         
-        # 组合状态向量
+        # 组合状态向量，确保维度正确
         self.current_state = np.concatenate([
-            joint_pos, joint_vel, joint_eff, end_effector_pos
+            joint_pos,     # 7维
+            joint_vel,     # 7维
+            joint_eff,     # 7维
+            end_effector_pos  # 3维
         ])
+    
+        # 验证维度
+        assert len(self.current_state) == self.state_dim, \
+            f"状态维度不匹配：期望{self.state_dim}，实际{len(self.current_state)}"
     
     def _load_inertia_params(self):
         """从URDF中提取完整的惯性参数（质量、转动惯量矩阵、质心位置）"""
@@ -169,21 +179,24 @@ class RobotEnv:
         cmd_msg = JointTrajectory()
         cmd_msg.joint_names = self.joint_names
         
-        # 获取当前状态作为起点
-        current_pos = self.current_state[:7]  # 当前位置
+        # 获取当前状态作为起点，确保是float类型
+        current_pos = [float(x) for x in self.current_state[:7]]
         
         # 创建短时间的轨迹（而不是单点）
         point1 = JointTrajectoryPoint()
-        point1.positions = current_pos.tolist()
+        point1.positions = current_pos
         point1.velocities = [0.0] * 7
         point1.time_from_start = rospy.Duration(0.0)
         
-        # 估算一个中间轨迹点传入cmd_msg
-        # 因为时间较短，直接使用两个点
-        # 而不是像RRT规划中那样取250个点
+        # 估算一个中间轨迹点
         point2 = JointTrajectoryPoint()
-        point2.positions = (current_pos + action * 0.1).tolist()  # 简单积分预测
-        point2.velocities = action.tolist()
+        
+        # 正确处理numpy数组类型的action
+        action = action.flatten()  # 确保是1维数组
+        next_pos = (np.array(current_pos) + action * 0.1).tolist()  # 使用numpy计算后转换为list
+        
+        point2.positions = next_pos
+        point2.velocities = action.tolist()  # 直接将numpy数组转换为list
         point2.time_from_start = rospy.Duration(0.1)
         
         cmd_msg.points = [point1, point2]
@@ -194,6 +207,46 @@ class RobotEnv:
         self.arm_client.wait_for_result(rospy.Duration(0.2))
         
         return self.current_state.copy(), self.calculate_reward(action), False, {}
+    
+    def reset(self):
+        """重置环境到初始状态"""
+        try:
+            # 创建初始轨迹消息
+            cmd_msg = JointTrajectory()
+            cmd_msg.joint_names = self.joint_names
+            
+            # 设置初始关节角度（确保使用float类型）
+            initial_positions = [float(x) for x in [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]]
+            
+            # 创建轨迹点
+            point = JointTrajectoryPoint()
+            # 确保所有数值都是float类型
+            point.positions = [float(pos) for pos in initial_positions]
+            point.velocities = [float(0.0)] * 7  # 明确指定float类型
+            point.time_from_start = rospy.Duration(1.0)
+            
+            cmd_msg.points.append(point)
+            
+            # 使用actionlib发送和等待
+            goal = FollowJointTrajectoryGoal(trajectory=cmd_msg)
+            self.arm_client.send_goal(goal)
+            
+            # 等待机械臂到达初始位置
+            self.arm_client.wait_for_result(rospy.Duration(2.0))
+            
+            # 等待一小段时间确保状态更新
+            rospy.sleep(0.1)
+            
+            # 确保我们有有效的状态
+            while self.current_state is None and not rospy.is_shutdown():
+                rospy.loginfo("等待初始状态更新...")
+                rospy.sleep(0.1)
+            
+            return self.current_state.copy()
+            
+        except Exception as e:
+            rospy.logerr(f"重置环境时出错: {str(e)}")
+            return None
 
 def train():
     """主训练循环"""
@@ -206,7 +259,6 @@ def train():
     episode_rewards = []
     
     for ep in range(max_episodes):
-        # 应用episode衰减机制（论文算法1第4行）
         if ep % 10 == 0 and agent.episode_length > agent.min_ep_length:
             agent.episode_length = int(agent.episode_length * agent.decay_rate)
             
@@ -215,9 +267,15 @@ def train():
         memory = []
         
         for step in range(agent.episode_length):
-            # 选择动作
-            action, _ = agent.policy(torch.FloatTensor(state))
-            action = action.detach().numpy()
+            # 确保状态是正确的格式
+            state_tensor = torch.FloatTensor(state)
+            if len(state_tensor.shape) == 1:
+                state_tensor = state_tensor.unsqueeze(0)
+            
+            # 获取动作
+            action, _ = agent.policy(state_tensor)
+            # 正确处理动作数据
+            action = action.detach().squeeze(0).numpy()  # 确保是numpy数组并移除多余的维度
             
             # 执行动作
             next_state, reward, done, _ = env.step(action)
@@ -229,15 +287,13 @@ def train():
             state = next_state
             episode_reward += reward
             
-            # 定期更新策略
             if len(memory) >= agent.batch_size:
                 agent.update_policy(*zip(*memory))
                 memory = []
                 
-        # 记录和打印训练进度
         episode_rewards.append(episode_reward)
         print(f"Episode {ep}, Reward: {episode_reward:.2f}, Length: {agent.episode_length}")
-    # 训练完成后保存模型
+    
     torch.save(agent.policy.state_dict(), 'arm_ppo.pth')
 
 if __name__ == "__main__":
