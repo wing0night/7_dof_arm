@@ -192,7 +192,7 @@ class LM_ik_solver():
         for joint_idx in range(len(goal_positions)):
             start = self.current_joint_positions[joint_idx]
             goal = goal_positions[joint_idx]
-            positions, velocities, _ = self.trapezoidal_interpolation(start, goal, duration, 50)
+            positions, velocities, _ = self.quintic_interpolation(start, goal, duration, 50)
             all_positions.append(positions)
             all_velocities.append(velocities)
 

@@ -152,6 +152,47 @@ class LM_ik_solver():
         
         return positions, velocities, t
     
+    def quintic_interpolation_segment(self, start, goal, duration, 
+                                 start_vel=None, end_vel=None, 
+                                 start_acc=0, end_acc=0, freq=50):
+        """改进的五次多项式插值（支持自定义起止速度和加速度）"""
+        # 初始化默认速度（若未指定则使用方向速度）
+        direction = goal - start
+        distance = np.linalg.norm(direction)
+        if start_vel is None:
+            start_vel = direction / distance * 0.5  # 默认初始速度
+        if end_vel is None:
+            end_vel = direction / distance * 0.5   # 默认结束速度
+
+        T = duration
+        a0 = start
+        a1 = start_vel
+        a2 = start_acc / 2.0
+
+        # 构建矩阵方程求解a3, a4, a5
+        A = np.array([
+            [T**3,    T**4,     T**5     ],
+            [3*T**2,  4*T**3,   5*T**4   ],
+            [6*T,     12*T**2,  20*T**3  ]
+        ])
+        b = np.array([
+            goal - (a0 + a1*T + a2*T**2),
+            end_vel - (a1 + 2*a2*T),
+            end_acc - 2*a2
+        ])
+        
+        try:
+            a3, a4, a5 = np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            return [], [], []
+
+        # 生成轨迹点
+        t = np.linspace(0, T, int(freq * T))
+        positions = a0 + a1*t[:, None] + a2*t[:, None]**2 + a3*t[:, None]**3 + a4*t[:, None]**4 + a5*t[:, None]**5
+        velocities = a1 + 2*a2*t[:, None] + 3*a3*t[:, None]**2 + 4*a4*t[:, None]**3 + 5*a5*t[:, None]**4
+        
+        return positions, velocities, t
+    
     def trapezoidal_interpolation(self, start, goal, duration, freq=50):
         """梯形速度曲线插值（三段式）"""
         num_points = int(duration * freq)
@@ -229,11 +270,11 @@ class LM_ik_solver():
             rospy.sleep(0.1)
         
         # 使用深拷贝避免原始数据被修改
-        start_positions = list(self.current_joint_positions)  # 从当前实际位置开始
+        startitions = list(self.current_joint_positions)  # 从当前实际位置开始
         goal_positions = list(goal_positions)
 
         # 参数维度验证
-        if len(start_positions) != 7 or len(goal_positions) !=7:
+        if len(startitions) != 7 or len(goal_positions) !=7:
             rospy.logerr("关节位置维度必须为7")
             return
 
@@ -246,7 +287,7 @@ class LM_ik_solver():
         for joint_idx in range(7):  # 固定处理7个关节
             # 使用梯形插值生成轨迹
             positions, velocities, _ = self.quintic_interpolation(
-                start=start_positions[joint_idx],
+                start=startitions[joint_idx],
                 goal=goal_positions[joint_idx],
                 duration=duration,
                 freq=50
@@ -319,18 +360,19 @@ class LM_ik_solver():
         if not self.arm_client.wait_for_result(rospy.Duration(duration+1)):
             rospy.logwarn("轨迹执行超时")
         
-        self.current_joint_positions = goal_positions  # 解除注释此行
+        self.current_joint_positions = goal_positions
 
     def _update_current_position(self, status, result, target_positions):
-        """处理动作执行完成回调"""
-        if status == actionlib.GoalStatus.SUCCEEDED:
-            rospy.loginfo("轨迹执行成功，更新关节状态")
-            with self.position_lock:
-                self.current_joint_positions = target_positions  # 解除注释此行
-        else:
-            rospy.logwarn(f"轨迹执行失败，状态码: {status}")
-            if hasattr(result, 'error_code'):
-                rospy.logerr(f"错误代码: {result.error_code}")
+        # """处理动作执行完成回调"""
+        # if status == actionlib.GoalStatus.SUCCEEDED:
+        #     rospy.loginfo("轨迹执行成功，更新关节状态")
+        #     with self.position_lock:
+        #         self.current_joint_positions = target_positions  # 解除注释此行
+        # else:
+        #     rospy.logwarn(f"轨迹执行失败，状态码: {status}")
+        #     if hasattr(result, 'error_code'):
+        #         rospy.logerr(f"错误代码: {result.error_code}")
+        self.current_joint_positions = target_positions  # 解除注释此行
     
     def plan_and_execute(self, goal_positions):
         # 验证输入
