@@ -54,16 +54,24 @@ class RobotEnv:
                            'joint5', 'joint6', 'joint7']
         self.state_dim = 7 * 3 + 3  # 7关节(位置+速度+力矩) + 末端位置
         self.action_dim = 7
+        # 初始化状态存储
+        self.current_state = None
+        self.current_joint_positions = None
         
         # 订阅者和发布者
-        self.state_sub = rospy.Subscriber('/joint_states', JointState, self.state_cb)
+        self.state_sub = rospy.Subscriber('/joint_states', JointState, self.state_cb, queue_size=1)
         # 控制运动的消息的发布
         self.cmd_pub = rospy.Publisher('/arm_controller/command', JointTrajectory, queue_size=1)
         # 这里可以是自定义消息的发布器用来绘图
         self.traj_pub = rospy.Publisher('/trajectory_data', TrajectoryData, queue_size=10)
+
+        # 等待第一次接收到关节状态
+        rospy.loginfo("等待接收第一帧关节状态...")
+        while self.current_state is None and not rospy.is_shutdown():
+            rospy.sleep(0.1)
+        rospy.loginfo("成功接收到关节状态！")
         
-        # 初始化状态存储
-        self.current_state = None
+        
         self.target_pos = np.array([0.5, 0.2, 0.5])  # 目标末端位置
         # 定义目标位置和旋转
         self.x = 0.5
@@ -152,29 +160,35 @@ class RobotEnv:
         return inertia_params
         
     def calculate_reward(self, action):
-        """多目标奖励计算（论文公式11-15）"""
-        # 位置误差奖励（公式12）
+        # 位置误差奖励
         pos_error = np.linalg.norm(self.current_state[-3:] - self.target_pos)
         reward_pos = -1.0 * np.exp(2 * pos_error)
         
-        # 平滑度奖励（公式13）
+        # 平滑度奖励
         joint_vel = self.current_state[7:14]
-        joint_acc = np.diff(joint_vel)  # 简化的加速度计算
+        joint_acc = np.diff(joint_vel)
         reward_smooth = -0.5 * (np.sum(joint_vel**2) + 0.2 * np.sum(joint_acc**2))
         
-        # 能量消耗奖励（公式14）
+        # 能量消耗奖励
         joint_effort = self.current_state[14:21]
         reward_energy = -0.3 * np.sum((joint_effort**2))
         
-        # 额外奖励（公式15）
-        if pos_error < 0.005:
-            reward_extra = 10.0
-        else:
-            reward_extra = 10 / (1 + 10 * pos_error)
-            
+        # 额外奖励
+        reward_extra = 10.0 if pos_error < 0.005 else 10 / (1 + 10 * pos_error)
+        
+        # 打印调试信息
+        print(f"Rewards: pos={reward_pos:.2f}, smooth={reward_smooth:.2f}, "
+            f"energy={reward_energy:.2f}, extra={reward_extra:.2f}")
+        
         return reward_pos + reward_smooth + reward_energy + reward_extra
     
     def step(self, action):
+        # 保存旧状态用于验证
+        old_state = self.current_state.copy() if self.current_state is not None else None
+
+        # 打印动作值
+        print("Action:", action)
+
         # 创建轨迹消息
         cmd_msg = JointTrajectory()
         cmd_msg.joint_names = self.joint_names
@@ -205,6 +219,19 @@ class RobotEnv:
         goal = FollowJointTrajectoryGoal(trajectory=cmd_msg)
         self.arm_client.send_goal(goal)
         self.arm_client.wait_for_result(rospy.Duration(0.2))
+
+        # 等待新状态更新
+        timeout = rospy.Duration(0.5)
+        start_time = rospy.Time.now()
+        while (self.current_state is None or 
+            np.array_equal(self.current_state, old_state)):
+            if (rospy.Time.now() - start_time) > timeout:
+                rospy.logwarn("状态更新超时！")
+                break
+            rospy.sleep(0.01)
+        
+        # 打印状态变化，用于调试
+        print("State change:", np.linalg.norm(self.current_state - old_state))
         
         return self.current_state.copy(), self.calculate_reward(action), False, {}
     
