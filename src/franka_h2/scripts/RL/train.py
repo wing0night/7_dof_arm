@@ -104,29 +104,31 @@ class RobotEnv:
         
     def state_cb(self, msg):
         """状态回调函数"""
-        # 解析关节状态：位置、速度、力矩
-        joint_pos = np.array(msg.position[:7])  # 确保是7维
-        joint_vel = np.array(msg.velocity[:7] if msg.velocity else [0.0]*7)  # 如果没有速度信息，用0填充
-        joint_eff = np.array(msg.effort[:7] if msg.effort else [0.0]*7)  # 如果没有力矩信息，用0填充
-        
-        # 获取末端执行器位置（使用正运动学计算）
-        # 创建Panda机器人模型
-        panda = rtb.models.URDF.Panda()
-        # 计算末端执行器位置
-        T = panda.fkine(joint_pos)
-        end_effector_pos = np.array([T.t[0], T.t[1], T.t[2]])
-        
-        # 组合状态向量，确保维度正确
-        self.current_state = np.concatenate([
-            joint_pos,     # 7维
-            joint_vel,     # 7维
-            joint_eff,     # 7维
-            end_effector_pos  # 3维
-        ])
-    
-        # 验证维度
-        assert len(self.current_state) == self.state_dim, \
-            f"状态维度不匹配：期望{self.state_dim}，实际{len(self.current_state)}"
+        try:
+            # 打印接收到的消息，验证数据
+            rospy.logdebug(f"接收到关节状态消息: pos={msg.position[:7]}")
+            
+            # 解析关节状态：位置、速度、力矩
+            joint_pos = np.array(msg.position[:7])
+            joint_vel = np.array(msg.velocity[:7] if msg.velocity else [0.0]*7)
+            joint_eff = np.array(msg.effort[:7] if msg.effort else [0.0]*7)
+            
+            # 获取末端执行器位置
+            panda = rtb.models.URDF.Panda()
+            T = panda.fkine(joint_pos)
+            end_effector_pos = np.array([T.t[0], T.t[1], T.t[2]])
+            
+            # 更新状态
+            with self.position_lock:
+                self.current_state = np.concatenate([
+                    joint_pos, joint_vel, joint_eff, end_effector_pos
+                ])
+                self.current_joint_positions = joint_pos
+            
+            rospy.logdebug("状态更新成功")
+            
+        except Exception as e:
+            rospy.logerr(f"状态回调处理错误: {str(e)}")
     
     def _load_inertia_params(self):
         """从URDF中提取完整的惯性参数（质量、转动惯量矩阵、质心位置）"""
@@ -192,9 +194,17 @@ class RobotEnv:
         # 创建轨迹消息
         cmd_msg = JointTrajectory()
         cmd_msg.joint_names = self.joint_names
-        
+
         # 获取当前状态作为起点，确保是float类型
-        current_pos = [float(x) for x in self.current_state[:7]]
+        with self.position_lock:
+            if self.current_state is None:
+                rospy.logwarn("当前状态为空，无法执行动作！")
+                return None, 0, True, {}
+            
+            # 获取当前关节位置
+            current_pos = self.current_joint_positions[:7]
+            # 确保是float类型
+            current_pos = [float(x) for x in current_pos]
         
         # 创建短时间的轨迹（而不是单点）
         point1 = JointTrajectoryPoint()
@@ -218,22 +228,31 @@ class RobotEnv:
         # 使用actionlib发送和等待
         goal = FollowJointTrajectoryGoal(trajectory=cmd_msg)
         self.arm_client.send_goal(goal)
-        self.arm_client.wait_for_result(rospy.Duration(0.2))
+        # 等待机械臂到达目标位置
+        if not self.arm_client.wait_for_result(rospy.Duration(2.0)):
+            rospy.logwarn("动作执行超时！")
 
-        # 等待新状态更新
-        timeout = rospy.Duration(0.5)
+         # 等待状态更新
+        update_timeout = 0.5  # 设置更长的超时时间
         start_time = rospy.Time.now()
-        while (self.current_state is None or 
-            np.array_equal(self.current_state, old_state)):
-            if (rospy.Time.now() - start_time) > timeout:
-                rospy.logwarn("状态更新超时！")
+        rate = rospy.Rate(50)  # 50Hz的检查频率
+        
+        while not rospy.is_shutdown():
+            if (rospy.Time.now() - start_time).to_sec() > update_timeout:
+                rospy.logwarn("等待状态更新超时")
                 break
-            rospy.sleep(0.01)
+                
+            with self.position_lock:
+                if self.current_state is not None:
+                    state_copy = self.current_state.copy()
+                    break
+                    
+            rate.sleep()
         
         # 打印状态变化，用于调试
         print("State change:", np.linalg.norm(self.current_state - old_state))
         
-        return self.current_state.copy(), self.calculate_reward(action), False, {}
+        return state_copy, self.calculate_reward(action), False, {}
     
     def reset(self):
         """重置环境到初始状态"""
