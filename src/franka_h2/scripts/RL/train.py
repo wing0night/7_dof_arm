@@ -3,7 +3,6 @@ import torch
 
 from PPOAgent import PPOAgent
 
-from __future__ import print_function 
 import rospy 
 import actionlib 
 from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal 
@@ -22,9 +21,9 @@ from franka_h2.msg import TrajectoryData
 # cal torque
 from urdf_parser_py.urdf import URDF
 import rospkg
+
 import os
 
-from RRT_Planner import RRTPlanner
 
 from threading import Lock
 
@@ -48,6 +47,8 @@ class RobotEnv:
         # 获取包路径
         rospack = rospkg.RosPack()
         pkg_path = rospack.get_path('franka_h2')
+        # 构建URDF文件路径
+        self.urdf_path = os.path.join(pkg_path, 'urdf', 'panda_robot_gazebo.urdf')
         
         # 状态参数
         self.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 
@@ -64,7 +65,7 @@ class RobotEnv:
         
         # 初始化状态存储
         self.current_state = None
-        self.target_pos = np.array([self.x, self.y, self.z])  # 目标末端位置
+        self.target_pos = np.array([0.5, 0.2, 0.5])  # 目标末端位置
         # 定义目标位置和旋转
         self.x = 0.5
         self.y = 0.2
