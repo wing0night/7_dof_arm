@@ -21,6 +21,9 @@ from urdf_parser_py.urdf import URDF
 import rospkg
 import os
 
+from fk import cal_fk
+import time
+
 class LM_ik_solver():
     def __init__(self):
         # 初始化标准轨迹动作客户端
@@ -301,14 +304,29 @@ R_custom = np.array([
 # 创建目标位姿
 # T_goal = SE3.Rt(R_custom, [x, y, z])
 
-T_goal = panda.fkine([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
-print(T_goal)
+T_goal = cal_fk([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
+# print(T_goal)
 
 # 逆运动学解算  
+# point_sol = panda.ikine_LM(T_goal)
+# print("IK Solution: ", point_sol.q)
+# T_actual = panda.fkine(point_sol.q)
+# print(T_actual)
+
+print("Target position:")
+print(T_goal)
+start_time = time.perf_counter()
 point_sol = panda.ikine_LM(T_goal)
-print("IK Solution: ", point_sol.q)
-T_actual = panda.fkine(point_sol.q)
+print("ik Solution :", point_sol.q)
+T_actual = cal_fk(point_sol.q)
+print("Actual position:")
 print(T_actual)
+
+# 记录结束时间
+end_time = time.perf_counter()
+# 计算并存储耗时（转换为毫秒）
+elapsed_ms = (end_time - start_time) * 1000
+print(f"耗时: {elapsed_ms:.4f} ms")
 
 
 if __name__ == '__main__':

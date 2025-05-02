@@ -23,5 +23,17 @@ franka_h2/rl：强化学习训练、部署代码
 - RRT中还存在bug，中move_to_goal函数中，在发送运动消息后如何等到机械臂运动到目标位置后再进行当前位置更新（`_update_current_position`函数），而不是直接在函数最后加一个`self.current_joint_positions = goal_positions`（不太规范）
 
 
+## scripts
+
+### 逆运动学解算
+
+ik_geo.py：逆解论文的解法的python版（ik_geo_cpp是官方写的cpp版）
+fk.py：panda的正向运动学计算
+random_j.py：随机生成末端位姿
+test_ik_plot.py：测试几何解法需要时间并绘图
+
+
+
+
 
 
