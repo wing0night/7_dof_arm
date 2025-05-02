@@ -286,10 +286,10 @@ T = panda.fkine(panda.qz, end='panda_hand')
 # 定义目标位置和旋转
 x = 0.5
 y = 0.2
-z = 0.5
+z = 0.25
 R_custom = np.array([
-    [0, -1, 0],
     [1, 0, 0],
+    [0, 1, 0],
     [0, 0, 1]
 ])
 # R_custom = np.array([
@@ -299,11 +299,16 @@ R_custom = np.array([
 # ])
 
 # 创建目标位姿
-T_goal = SE3.Rt(R_custom, [x, y, z])
+# T_goal = SE3.Rt(R_custom, [x, y, z])
+
+T_goal = panda.fkine([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
+print(T_goal)
 
 # 逆运动学解算  
 point_sol = panda.ikine_LM(T_goal)
 print("IK Solution: ", point_sol.q)
+T_actual = panda.fkine(point_sol.q)
+print(T_actual)
 
 
 if __name__ == '__main__':
