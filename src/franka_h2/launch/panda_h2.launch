@@ -45,19 +45,26 @@
 
     <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
 
-    <node 
+    <!-- <node 
         pkg="franka_h2" 
         type="LM_ik_solver.py" 
         name="ik_solver" 
         output="screen"
+    /> -->
+
+    <node 
+        pkg="franka_h2" 
+        type="Cubic_spline_interpolation.py" 
+        name="CSI_solver" 
+        output="screen"
     />
 
-    <!-- <node 
+    <node 
         pkg="franka_h2" 
         type="plot_cal.py" 
         name="plot_cal_loss_function" 
         output="screen"
-    /> -->
+    />
 
 
     <param name="rate" value="2500"/>
