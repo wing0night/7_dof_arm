@@ -54,7 +54,7 @@
 
     <node 
         pkg="franka_h2" 
-        type="Cubic_spline_interpolation.py" 
+        type="Cubic_spline_interpolation_inter.py" 
         name="CSI_solver" 
         output="screen"
     />

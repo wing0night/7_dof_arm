@@ -75,7 +75,6 @@ class JointStateLogger:
         plt.ylabel('Velocity (rad/s)')
         plt.title('All Joints Velocity')
         plt.grid(True)
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         
         # 加速度子图
         plt.subplot(4, 1, 3)
@@ -105,7 +104,7 @@ class JointStateLogger:
         rospack = rospkg.RosPack()
         save_path = os.path.join(
             rospack.get_path("franka_h2"),
-            "results",
+            "plots",
             "all_joints_plot.png"
         )
         plt.savefig(save_path, bbox_inches='tight')

@@ -28,13 +28,18 @@ franka_h2/rl：强化学习训练、部署代码
 ### 逆运动学解算
 
 ik_geo.py：逆解论文的解法的python版（ik_geo_cpp是官方写的cpp版）
+
 fk.py：panda的正向运动学计算
+
 random_j.py：随机生成末端位姿
+
 test_ik_plot.py：测试几何解法需要时间并绘图
+
 ik_test_LM.py：测试LM法逆解需要时间并绘图
 
-Cubic_spline_interpolation.py：测试三次样条差值。输出ROS运行视频，运动过程中速度-时间曲线、加速度-时间曲线、力矩-时间曲线。
+Cubic_spline_interpolation_simple.py：测试三次样条差值(只有起始点)。输出ROS运行视频，运动过程中速度-时间曲线、加速度-时间曲线、力矩-时间曲线。
 
+Cubic_spline_interpolation_inter.py：测试三次样条差值（有中间点）
 
 
 

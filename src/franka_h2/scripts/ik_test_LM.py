@@ -10,29 +10,6 @@ import matplotlib.pyplot as plt
 panda = rtb.models.URDF.Panda()
 
 T_goal = cal_fk([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
-# print(T_goal)
-
-# 逆运动学解算  
-# point_sol = panda.ikine_LM(T_goal)
-# print("IK Solution: ", point_sol.q)
-# T_actual = panda.fkine(point_sol.q)
-# print(T_actual)
-
-# print("Target position:")
-# print(T_goal)
-# start_time = time.perf_counter()
-# point_sol = panda.ikine_LM(T_goal)
-# print("ik Solution :", point_sol.q)
-# T_actual = cal_fk(point_sol.q)
-# print("Actual position:")
-# print(T_actual)
-
-# # 记录结束时间
-# end_time = time.perf_counter()
-# # 计算并存储耗时（转换为毫秒）
-# elapsed_ms = (end_time - start_time) * 1000
-# print(f"耗时: {elapsed_ms:.4f} ms")
-
 
 
 def test_ik(T_test):
@@ -84,6 +61,9 @@ if __name__ == "__main__":
         execution_times.append(elapsed_ms)
         generation_counts.append(i+1)
 
+    plt.rcParams["figure.facecolor"] = 'white'   # 画布背景色
+    plt.rcParams["axes.facecolor"] = 'white'     # 坐标区背景色
+    plt.rcParams["savefig.facecolor"] = 'white'  # 保存图片背景色
     # 创建可视化图表
     plt.figure(figsize=(12, 6))
 

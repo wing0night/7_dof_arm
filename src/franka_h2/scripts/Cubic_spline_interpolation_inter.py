@@ -24,8 +24,9 @@ import os
 from fk import cal_fk
 import time
 from ik_geo import franka_IK_EE
+from CSI import ManualCubicSpline
 
-class CSI_solver():
+class CSI_complex_solver():
     def __init__(self):
         # 初始化标准轨迹动作客户端
         self.arm_client = actionlib.SimpleActionClient(
@@ -92,50 +93,49 @@ class CSI_solver():
                     break
         return inertia_params
     
-    def generate_trajectory(self, q_start, q_end, duration, freq = 50):
-        """生成三次样条轨迹"""
-        trajectory = JointTrajectory()
-        trajectory.joint_names = self.joint_names
+    # def generate_trajectory(self, q_waypoints, t_waypoints, freq=50):
+    #     """生成多中间点三次样条轨迹"""
         
-        # 时间参数设置
-        # sample_rate = freq  # Hz
-        # dt = 1.0/sample_rate
-        num_points = int(duration * freq)
-        t = np.linspace(0, duration, num_points)
+    #     # 时间参数设置
+    #     duration = t_waypoints[-1]
+    #     num_points = int(duration * freq)
+    #     t = np.linspace(0, duration, num_points)
 
-        # 计算各关节参数
-        positions = []
-        velocities = []
-        accelerations = []
+    #     # 计算各关节参数
+    #     positions = []
+    #     velocities = []
+    #     accelerations = []
+
+    #     # 为每个关节创建样条函数
+    #     n_joints = len(q_waypoints[0])
+    #     splines = []
+    #     for j in range(n_joints):
+    #         # 提取当前关节的路径点
+    #         q = [point[j] for point in q_waypoints]
+    #         # 创建三次样条插值器
+    #         from scipy.interpolate import CubicSpline
+    #         cs = CubicSpline(t_waypoints, q, bc_type='natural')
+    #         splines.append(cs)
+
+    #     # 生成轨迹点
+    #     for ti in t:
+    #         point = JointTrajectoryPoint()
+    #         pos = []
+    #         vel = []
+    #         acc = []
+    #         for j in range(n_joints):
+    #             # 计算各关节参数
+    #             cs = splines[j]
+    #             pos.append(cs(ti))
+    #             vel.append(cs(ti, 1))  # 一阶导数
+    #             acc.append(cs(ti, 2))  # 二阶导数
+            
+    #         positions.append(pos)
+    #         velocities.append(vel)
+    #         accelerations.append(acc)
+
+    #     return positions, velocities, t
     
-        for ti in t:
-            # t_p = t[i]
-            point = JointTrajectoryPoint()
-            
-            
-            # for j in range(7):
-            # 三次样条计算
-            a0 = q_start
-            a1 = 0.0
-            a2 = 3*(q_end-q_start)/(duration**2)
-            a3 = -2*(q_end-q_start)/(duration**3)
-            
-            pos = a0 + a1*ti + a2*ti**2 + a3*ti**3
-            vel = a1 + 2*a2*ti + 3*a3*ti**2
-            acc = 2*a2 + 6*a3*ti
-            
-            positions.append(pos)
-            velocities.append(vel)
-            accelerations.append(acc)
-            
-            # 填充轨迹点
-            # point.positions = positions
-            # point.velocities = velocities
-            # point.accelerations = accelerations
-            # point.time_from_start = rospy.Duration(ti)
-            # trajectory.points.append(point)
-        
-        return positions, velocities, t
     
     def calculate_gravity_torques(self):
         """计算各关节重力矩（返回字典形式）"""
@@ -167,12 +167,14 @@ class CSI_solver():
             
         return gravity_torques
 
-    def move_to_goal(self, goal_positions, duration=5.0):
+    def move_to_goal(self, goal_positions, duration=10.0):
         if self.current_joint_positions is None:
             rospy.logerr("未获取到当前关节状态！")
             return
+        
+        duration_single = duration / 4
 
-        num_points = int(duration * 50)
+        num_points = int(duration* 50)
         timestamps = np.linspace(0, duration, num_points)
 
         gravity_torques = self.calculate_gravity_torques()
@@ -182,13 +184,123 @@ class CSI_solver():
         # 存储插值数据
         all_positions = []
         all_velocities = []
+
+        t_waypoints = np.linspace(0, duration, 5)
+        
         for joint_idx in range(len(goal_positions)):
-            start = self.current_joint_positions[joint_idx]
-            goal = goal_positions[joint_idx]
-            positions, velocities, _ = self.generate_trajectory(start, goal, duration, 50)
-            all_positions.append(positions)
-            all_velocities.append(velocities)
-            # trajectory = self.generate_trajectory(start, goal, duration)
+            # 为不同关节设置不同的中间轨迹点
+            if joint_idx == 0:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/5+start))
+                q_waypoints.append(((goal-start)/4+start))
+                q_waypoints.append(((goal-start)/3+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline1 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline1.evaluate(t_samples, 0)
+                velocities = spline1.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            elif joint_idx == 1:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/2+start))
+                q_waypoints.append(((goal-start)/1.5+start))
+                q_waypoints.append(((goal-start)/1.2+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline2 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline2.evaluate(t_samples, 0)
+                velocities = spline2.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            elif joint_idx == 2:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/3+start))
+                q_waypoints.append(((goal-start)/2.5+start))
+                q_waypoints.append(((goal-start)/1.5+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline3 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline3.evaluate(t_samples, 0)
+                velocities = spline3.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            elif joint_idx == 3:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/2+start))
+                q_waypoints.append(((goal-start)/1.5+start))
+                q_waypoints.append(((goal-start)/1.2+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline4 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline4.evaluate(t_samples, 0)
+                velocities = spline4.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            elif joint_idx == 4:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/4+start))
+                q_waypoints.append(((goal-start)/3+start))
+                q_waypoints.append(((goal-start)/1.2+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline5 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline5.evaluate(t_samples, 0)
+                velocities = spline5.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            elif joint_idx == 5:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/3+start))
+                q_waypoints.append(((goal-start)/2+start))
+                q_waypoints.append(((goal-start)/1.5+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline6 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline6.evaluate(t_samples, 0)
+                velocities = spline6.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            elif joint_idx == 6:
+                q_waypoints = []
+                start = self.current_joint_positions[joint_idx]
+                goal = goal_positions[joint_idx]
+                q_waypoints.append(start)
+                q_waypoints.append(((goal-start)/2+start))
+                q_waypoints.append(((goal-start)/1.5+start))
+                q_waypoints.append(((goal-start)/1.2+start))
+                q_waypoints.append(goal)
+                print(q_waypoints)
+                spline7 = ManualCubicSpline(t_waypoints, q_waypoints)
+                t_samples = np.linspace(t_waypoints[0], t_waypoints[-1], num_points)
+                positions = spline7.evaluate(t_samples, 0)
+                velocities = spline7.evaluate(t_samples, 1)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
 
         # ================== 新增：构建标准JointTrajectory ==================
         std_traj_msg = JointTrajectory()
@@ -332,18 +444,37 @@ if __name__ == '__main__':
 
     rospy.init_node('arm_interpolation_controller')
 
-    solve_ik = CSI_solver()
+    solve_ik = CSI_complex_solver()
     #move_robot_arm([point_sol[0] , point_sol[1] , point_sol[2] , point_sol[3] , point_sol[4]])
     # solve_ik.move_robot_arm(point_sol.q)
 
     print(solutions[0])
 
-    solve_ik.move_to_goal(solutions[0], duration=5.0)
+    solve_ik.move_to_goal(solutions[0], duration=10.0)
     
     print("Robotic arm has successfully reached the goal!")
      
   except rospy.ROSInterruptException:
     print("Program interrupted before completion.", file=sym.stderr)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
