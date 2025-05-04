@@ -24,6 +24,8 @@ import os
 from fk import cal_fk
 import time
 from ik_geo import franka_IK_EE
+import random
+from collections import defaultdict
 
 class CSI_solver():
     def __init__(self):
@@ -130,6 +132,164 @@ class CSI_solver():
             
         return positions, velocities, t
     
+    def generate_optimized_trajectory(self, q_start, q_end, duration, freq=50):
+        """使用NSGA-II优化生成轨迹"""
+        # NSGA-II参数设置
+        population_size = 50
+        generations = 100
+        crossover_prob = 0.9
+        mutation_prob = 0.1
+        variable_ranges = [ # 各关节速度范围（单位：rad/s）
+        (-2.5, 2.5),    # 关节1
+        (-2.5, 2.5),    # 关节2
+        (-2.5, 2.5),    # 关节3
+        (-2.5, 2.5),    # 关节4
+        (-5.0, 5.0),    # 关节5
+        (-4.0, 4.0),    # 关节6
+        (-5.0, 5.0)     # 关节7
+        ]
+
+        # 目标函数计算
+        def evaluate(individual):
+            """计算单个个体的双目标适应度"""
+            total_smoothness = 0.0
+            total_energy = 0.0
+            T = duration
+
+            # for j in range(7):
+            # 获取关节参数
+            joint_name = self.joint_names
+            params = self.inertia_params[joint_name]
+            I_j = params['inertia_matrix'][2][2]  # 绕Z轴的转动惯量
+            g_j = self.calculate_gravity_torques()[joint_name]
+
+            # 轨迹参数计算
+            delta_q = q_end - q_start
+            v_start = individual
+            
+            # 三次多项式系数计算
+            a2 = (3*delta_q - 2*v_start*T) / T**2
+            a3 = (-2*(delta_q - v_start*T/2)) / T**3
+
+            # 计算平滑性指标（加速度平方积分）
+            integral_acc_sq = 4*a2**2*T + 12*a2*a3*T**2 + 12*a3**2*T**3
+            total_smoothness += integral_acc_sq
+
+            # 计算能耗指标（力矩平方积分）
+            integral_tau_sq = (I_j**2 * integral_acc_sq) + (2*I_j*g_j*(-v_start)) + (g_j**2 * T)
+            total_energy += integral_tau_sq
+
+            return (total_smoothness, total_energy)
+
+        # 遗传算子
+        def crossover(p1, p2):
+            """模拟二进制交叉"""
+            child1, child2 = [], []
+            for i in range(7):
+                beta = np.random.uniform(0.9, 1.1)
+                child1.append(0.5*((1+beta)*p1[i] + (1-beta)*p2[i]))
+                child2.append(0.5*((1-beta)*p1[i] + (1+beta)*p2[i]))
+            return child1, child2
+
+        def mutate(ind):
+            """多项式变异"""
+            mutated = ind.copy()
+            for i in range(7):
+                if random.random() < mutation_prob:
+                    mutated[i] += np.random.normal(0, 0.1)
+                    mutated[i] = np.clip(mutated[i], *variable_ranges[i])
+            return mutated
+
+        # 初始化种群
+        population = [[np.random.uniform(variable_ranges[j][0], variable_ranges[j][1]) for j in range(7)] for _ in range(population_size)]
+
+        # 进化循环
+        for _ in range(generations):
+            # 评估适应度
+            fitness = [evaluate(ind) for ind in population]
+
+            # 非支配排序
+            fronts = []
+            dominated_count = defaultdict(int)
+            dominated_set = defaultdict(list)
+            ranks = {}
+            
+            # 构建支配关系
+            for i, f1 in enumerate(fitness):
+                for j, f2 in enumerate(fitness):
+                    if f1[0] < f2[0] and f1[1] < f2[1]:
+                        dominated_set[i].append(j)
+                        dominated_count[j] += 1
+
+            # 构建前沿
+            current_front = [i for i in range(population_size) if dominated_count[i] == 0]
+            fronts.append(current_front)
+            
+            # 后续前沿
+            next_front = []
+            while current_front:
+                for i in current_front:
+                    for j in dominated_set[i]:
+                        dominated_count[j] -= 1
+                        if dominated_count[j] == 0:
+                            next_front.append(j)
+                fronts.append(next_front)
+                current_front = next_front
+                next_front = []
+
+            # 选择操作（简单截断选择）
+            selected = []
+            for front in fronts:
+                if len(selected) + len(front) <= population_size:
+                    selected.extend(front)
+                else:
+                    remaining = population_size - len(selected)
+                    selected += front[:remaining]
+                    break
+
+            # 生成新种群
+            new_population = [population[i] for i in selected]
+            while len(new_population) < population_size:
+                # 选择父代
+                p1, p2 = random.choices(selected, k=2)
+                # 交叉
+                if random.random() < crossover_prob:
+                    c1, c2 = crossover(population[p1], population[p2])
+                    new_population.extend([c1, c2])
+                # 变异
+                else:
+                    new_population.append(mutate(population[p1]))
+                    new_population.append(mutate(population[p2]))
+            population = new_population[:population_size]
+
+        # 选择最优解（取第一个前沿的第一个解）
+        best_ind = population[0]
+
+        # 生成轨迹数据
+        num_points = int(duration * freq)
+        t = np.linspace(0, duration, num_points)
+        positions = []
+        velocities = []
+        
+        # for j in range(7):
+        v_start = best_ind
+        delta_q = q_end - q_start
+        a2 = (3*delta_q - 2*v_start*duration) / duration**2
+        a3 = (-2*(delta_q - v_start*duration/2)) / duration**3
+        
+        joint_pos = []
+        joint_vel = []
+        for ti in t:
+            pos = q_start + v_start*ti + a2*ti**2 + a3*ti**3
+            vel = v_start + 2*a2*ti + 3*a3*ti**2
+            joint_pos.append(pos)
+            joint_vel.append(vel)
+        positions.append(joint_pos)
+        velocities.append(joint_vel)
+
+        # 转置为时间主维度
+        return np.array(positions).T.tolist(), np.array(velocities).T.tolist(), t
+    
     def calculate_gravity_torques(self):
         """计算各关节重力矩（返回字典形式）"""
         g = 9.81  # 重力加速度
@@ -178,7 +338,7 @@ class CSI_solver():
         for joint_idx in range(len(goal_positions)):
             start = self.current_joint_positions[joint_idx]
             goal = goal_positions[joint_idx]
-            positions, velocities, _ = self.generate_trajectory(start, goal, duration, 50)
+            positions, velocities, _ = self.generate_optimized_trajectory(start, goal, duration, 50)
             all_positions.append(positions)
             all_velocities.append(velocities)
             # trajectory = self.generate_trajectory(start, goal, duration)
@@ -311,29 +471,5 @@ if __name__ == '__main__':
      
   except rospy.ROSInterruptException:
     print("Program interrupted before completion.", file=sym.stderr)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

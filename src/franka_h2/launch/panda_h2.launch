@@ -52,12 +52,23 @@
         output="screen"
     /> -->
 
+    <!-- <arg name="sim_mode" default="true" />
+    <arg name="record_video" default="true" />
+    <node if="$(arg record_video)" name="gazebo_video" pkg="franka_h2" type="start_gazebo_recording.sh" output="log" /> -->
+
     <node 
         pkg="franka_h2" 
         type="Cubic_spline_interpolation_inter.py" 
         name="CSI_solver" 
         output="screen"
     />
+
+    <!-- <node 
+        pkg="franka_h2" 
+        type="NSGA-2.py" 
+        name="CSI_solver" 
+        output="screen"
+    /> -->
 
     <node 
         pkg="franka_h2" 
@@ -68,4 +79,6 @@
 
 
     <param name="rate" value="2500"/>
+
+    
 </launch>
