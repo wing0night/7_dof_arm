@@ -41,5 +41,9 @@ Cubic_spline_interpolation_simple.py：测试三次样条差值(只有起始点)
 
 Cubic_spline_interpolation_inter.py：测试三次样条差值（有中间点）
 
+CSI.py：含中间点的三次样条差值规划中用到的插值求解器类
+
+NSGA-2.py：测试NSGA-2群优化算法
+
 
 
