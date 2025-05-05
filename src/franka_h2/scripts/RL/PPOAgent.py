@@ -19,7 +19,7 @@ class PPOAgent:
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=self.lr)
         
         # 衰减episode参数
-        self.episode_length = 10  # 初始episode长度
+        self.episode_length = 100  # 初始episode长度
         self.decay_rate = 0.995    # 衰减率
         self.min_ep_length = 10   # 最小长度
 

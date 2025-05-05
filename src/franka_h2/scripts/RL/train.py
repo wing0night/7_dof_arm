@@ -26,6 +26,11 @@ import os
 
 from threading import Lock
 
+from gazebo_msgs.msg import ModelStates, LinkStates
+from gazebo_msgs.srv import GetModelState, GetLinkState, GetJointProperties
+from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import Empty
+
 # 获取包路径
 rospack = rospkg.RosPack()
 pkg_path = rospack.get_path('franka_h2')
@@ -50,9 +55,7 @@ class RobotEnv:
             'panda_controller/follow_joint_trajectory', 
             FollowJointTrajectoryAction
         )
-        if not self.arm_client.wait_for_server(rospy.Duration(10.0)):
-            rospy.logerr("Action server not available!")
-            raise RuntimeError("Action server not available!")
+        self.arm_client.wait_for_server()
 
         
         # 构建URDF文件路径
@@ -82,8 +85,7 @@ class RobotEnv:
         self.state_sub = rospy.Subscriber(
             '/joint_states', 
             JointState, 
-            self.state_cb,
-            queue_size=10
+            self.state_cb
         )
         # 控制运动的消息的发布
         self.cmd_pub = rospy.Publisher('/joint_trajectory', JointTrajectory, queue_size=10)
@@ -122,10 +124,143 @@ class RobotEnv:
             [-0.0175, 3.7525],  # joint6
             [-2.8973, 2.8973]   # joint7
         ]
+
+        # 添加Gazebo服务客户端
+        rospy.loginfo("等待Gazebo服务...")
+        try:
+            rospy.wait_for_service('/gazebo/get_model_state', timeout=5.0)
+            rospy.wait_for_service('/gazebo/get_link_state', timeout=5.0)
+            rospy.wait_for_service('/gazebo/get_joint_properties', timeout=5.0)
+            
+            self.get_model_state = rospy.ServiceProxy('/gazebo/get_model_state', GetModelState)
+            self.get_link_state = rospy.ServiceProxy('/gazebo/get_link_state', GetLinkState)
+            self.get_joint_properties = rospy.ServiceProxy('/gazebo/get_joint_properties', GetJointProperties)
+            
+            rospy.loginfo("Gazebo服务连接成功")
+        except rospy.ROSException as e:
+            rospy.logerr(f"连接Gazebo服务失败: {str(e)}")
+            raise
+        
+        # 订阅Gazebo的状态话题
+        self.model_states_sub = rospy.Subscriber(
+            '/gazebo/model_states', 
+            ModelStates, 
+            self.gazebo_model_callback
+        )
+        
+        self.link_states_sub = rospy.Subscriber(
+            '/gazebo/link_states', 
+            LinkStates, 
+            self.gazebo_link_callback
+        )
+        
+        # 存储Gazebo状态
+        self.gazebo_model_state = None
+        self.gazebo_link_states = None
+    
+    def gazebo_model_callback(self, msg):
+        """处理Gazebo模型状态更新"""
+        try:
+            # 找到panda机器人的索引
+            if 'panda' in msg.name:
+                idx = msg.name.index('panda')
+                self.gazebo_model_state = {
+                    'pose': msg.pose[idx],
+                    'twist': msg.twist[idx]
+                }
+        except Exception as e:
+            rospy.logerr(f"处理Gazebo模型状态时出错: {str(e)}")
+    
+    def gazebo_link_callback(self, msg):
+        """处理Gazebo链接状态更新"""
+        try:
+            self.gazebo_link_states = {}
+            for i, name in enumerate(msg.name):
+                if 'panda' in name:
+                    self.gazebo_link_states[name] = {
+                        'pose': msg.pose[i],
+                        'twist': msg.twist[i]
+                    }
+        except Exception as e:
+            rospy.logerr(f"处理Gazebo链接状态时出错: {str(e)}")
+    
+    def get_gazebo_joint_state(self, joint_name):
+        """获取指定关节的状态"""
+        try:
+            # 获取关节属性
+            resp = self.get_joint_properties(f"panda::{joint_name}")
+            if resp.success:
+                return {
+                    'position': resp.position[0],
+                    'rate': resp.rate[0],
+                    'effort': resp.effort[0]
+                }
+            else:
+                rospy.logwarn(f"获取关节 {joint_name} 状态失败")
+                return None
+        except Exception as e:
+            rospy.logerr(f"调用Gazebo服务失败: {str(e)}")
+            return None
+    
+    def get_all_joint_states_from_gazebo(self):
+        """从Gazebo获取所有关节状态"""
+        joint_states = {}
+        for joint_name in self.joint_names:
+            state = self.get_gazebo_joint_state(joint_name)
+            if state:
+                joint_states[joint_name] = state
+        return joint_states
+    
+    def update_state_from_gazebo(self):
+        """使用Gazebo数据更新机器人状态"""
+        try:
+            # 获取所有关节状态
+            joint_states = self.get_all_joint_states_from_gazebo()
+            if not joint_states:
+                return False
+            
+            # 更新状态
+            with self.position_lock:
+                # 更新关节位置
+                positions = []
+                velocities = []
+                efforts = []
+                
+                for joint_name in self.joint_names:
+                    if joint_name in joint_states:
+                        state = joint_states[joint_name]
+                        positions.append(state['position'])
+                        velocities.append(state['rate'])
+                        efforts.append(state['effort'])
+                
+                self.current_joint_positions = np.array(positions)
+                self.current_joint_velocities = np.array(velocities)
+                self.current_joint_efforts = np.array(efforts)
+                
+                # 计算末端执行器位置
+                T = self.panda.fkine(self.current_joint_positions)
+                self.current_ee_pos = np.array([T.t[0], T.t[1], T.t[2]])
+                
+                # 更新完整状态向量
+                self.current_state = np.concatenate([
+                    self.current_joint_positions,
+                    self.current_joint_velocities,
+                    self.current_joint_efforts,
+                    self.current_ee_pos
+                ])
+                
+                self.state_updated = True
+                self.last_update_time = rospy.Time.now()
+                
+            return True
+            
+        except Exception as e:
+            rospy.logerr(f"从Gazebo更新状态时出错: {str(e)}")
+            return False
     
     def _handle_action_done(self, status, result):
-        with self.position_lock:
-            self.current_joint_positions = result.actual.positions
+        # with self.position_lock:
+        self.current_joint_positions = result.actual.positions
         
     def state_cb(self, msg):
         """改进的状态回调函数"""
@@ -140,21 +275,21 @@ class RobotEnv:
             end_effector_pos = np.array([T.t[0], T.t[1], T.t[2]])
             
             # 使用锁保护状态更新
-            with self.position_lock:
-                # 更新各个状态组件
-                self.current_joint_positions = joint_pos
-                self.current_joint_velocities = joint_vel
-                self.current_joint_efforts = joint_eff
-                self.current_ee_pos = end_effector_pos
-                
-                # 构建完整状态向量
-                self.current_state = np.concatenate([
-                    joint_pos, joint_vel, joint_eff, end_effector_pos
-                ])
-                
-                # 更新状态标志
-                self.state_updated = True
-                self.last_update_time = rospy.Time.now()
+            # with self.position_lock:
+            # 更新各个状态组件
+            self.current_joint_positions = joint_pos
+            self.current_joint_velocities = joint_vel
+            self.current_joint_efforts = joint_eff
+            self.current_ee_pos = end_effector_pos
+            
+            # 构建完整状态向量
+            self.current_state = np.concatenate([
+                joint_pos, joint_vel, joint_eff, end_effector_pos
+            ])
+            
+            # 更新状态标志
+            self.state_updated = True
+            self.last_update_time = rospy.Time.now()
             
             rospy.logdebug(f"状态更新成功: pos={joint_pos}")
             
@@ -170,10 +305,10 @@ class RobotEnv:
             if (rospy.Time.now() - start_time).to_sec() > timeout:
                 return False
                 
-            with self.position_lock:
-                if self.state_updated:
-                    self.state_updated = False  # 重置标志
-                    return True
+            # with self.position_lock:
+            if self.state_updated:
+                self.state_updated = False  # 重置标志
+                return True
             
             rate.sleep()
         
@@ -254,113 +389,89 @@ class RobotEnv:
         
         return total_reward
     
-    def generate_trajectory(self, current_pos, next_pos, duration=1.0, freq=50):
-        """生成完整的轨迹"""
+    def quintic_interpolation(self, start, goal, duration, freq=50):
+        """五次多项式插值"""
         num_points = int(duration * freq)
         t = np.linspace(0, duration, num_points)
         positions = []
         velocities = []
         
         for ti in t:
-            # 五次多项式插值
-            normalized_time = ti / duration
-            s = 10 * normalized_time**3 - 15 * normalized_time**4 + 6 * normalized_time**5
-            s_dot = (30 * normalized_time**2 - 60 * normalized_time**3 + 30 * normalized_time**4) / duration
-            
-            pos = []
-            vel = []
-            for i in range(len(current_pos)):
-                delta = next_pos[i] - current_pos[i]
-                pos.append(current_pos[i] + s * delta)
-                vel.append(s_dot * delta)
-            
+            # 五次多项式系数计算（此处简化）
+            pos = start + (goal - start) * (10*(ti/duration)**3 - 15*(ti/duration)**4 + 6*(ti/duration)**5)
+            vel = (goal - start) * (30*(ti/duration)**2 - 60*(ti/duration)**3 + 30*(ti/duration)**4) / duration
             positions.append(pos)
             velocities.append(vel)
-            
+        
         return positions, velocities, t
     
     def step(self, action):
-        """改进的step函数"""
+        """改进的step函数，使用action client的反馈机制"""
         try:
             rospy.loginfo("开始执行step函数...")
             
-            # 保存旧状态
-            with self.position_lock:
-                if self.current_state is None:
-                    rospy.logwarn("当前状态为空，无法执行动作！")
-                    return None, 0, True, {}
-                old_state = self.current_state.copy()
-                current_pos = self.current_joint_positions.copy()
-                rospy.loginfo(f"当前关节位置: {current_pos}")
+            if self.current_state is None:
+                rospy.logwarn("当前状态为空，无法执行动作！")
+                return None, 0, True, {}
+                
+            old_state = self.current_state.copy()
+            current_pos = self.current_joint_positions.copy()
             
             # 计算目标位置
             action = action.flatten()
             next_pos = (np.array(current_pos) + action * 0.1).tolist()
-            rospy.loginfo(f"动作: {action}")
-            rospy.loginfo(f"计算的目标位置: {next_pos}")
             
-            # 生成和发送轨迹
-            rospy.loginfo("开始生成轨迹...")
-            positions, velocities, timestamps = self.generate_trajectory(
-                current_pos, next_pos, duration=1.0
-            )
-            rospy.loginfo(f"生成了 {len(positions)} 个轨迹点")
-            
-            # 创建并发送轨迹消息
-            rospy.loginfo("创建轨迹消息...")
+            # 创建轨迹消息
             traj_msg = JointTrajectory()
             traj_msg.joint_names = self.joint_names
+            duration = 3.0
             
-            for i in range(len(timestamps)):
-                point = JointTrajectoryPoint()
-                point.positions = positions[i]
-                point.velocities = velocities[i]
-                point.time_from_start = rospy.Duration(timestamps[i])
-                traj_msg.points.append(point)
+            # 创建轨迹点
+            point = JointTrajectoryPoint()
+            point.positions = next_pos
+            point.velocities = [0.0] * len(self.joint_names)
+            point.time_from_start = rospy.Duration(duration)
+            traj_msg.points.append(point)
             
-            # 发送轨迹
-            rospy.loginfo("发送轨迹到action server...")
+            # 创建动作目标
             goal = FollowJointTrajectoryGoal()
             goal.trajectory = traj_msg
-            self.arm_client.send_goal(goal)
             
-            # 等待动作完成和状态更新
-            rospy.loginfo("等待动作执行完成...")
-            if not self.arm_client.wait_for_result(rospy.Duration(2.0)):
+            # 定义反馈回调
+            self.action_completed = False
+            self.latest_feedback = None
+            
+            # 发送目标并注册回调
+            self.arm_client.send_goal(
+                goal
+            )
+            
+            # 等待动作完成
+            if not self.arm_client.wait_for_result(rospy.Duration(5.0)):
                 rospy.logwarn("动作执行超时！")
                 return None, 0, True, {}
             
-            # 等待状态更新
-            rospy.loginfo("等待状态更新...")
-            if not self.wait_for_state_update(timeout=0.5):
-                rospy.logwarn("等待状态更新超时")
+            # 直接从Gazebo获取最新状态
+            if not self.update_state_from_gazebo():
+                rospy.logwarn("无法从Gazebo更新状态")
                 return None, 0, True, {}
             
             # 获取新状态并验证变化
-            with self.position_lock:
-                new_state = self.current_state.copy()
-                rospy.loginfo(f"新的关节位置: {new_state[:7]}")
-            
+            new_state = self.current_state.copy()
             state_change = np.linalg.norm(new_state[:7] - old_state[:7])
             rospy.loginfo(f"状态变化量: {state_change}")
             
             if state_change < 1e-6:
                 rospy.logwarn("状态似乎没有更新！")
-                rospy.logwarn(f"旧状态: {old_state[:7]}")
-                rospy.logwarn(f"新状态: {new_state[:7]}")
                 return None, 0, True, {}
             
             # 计算奖励
-            rospy.loginfo("计算奖励...")
             reward = self.calculate_reward(action)
-            rospy.loginfo(f"获得奖励: {reward}")
             
-            rospy.loginfo("step函数执行完成")
             return new_state, reward, False, {}
             
         except Exception as e:
             rospy.logerr(f"执行动作时出错: {str(e)}")
-            # 打印更详细的错误信息
             import traceback
             rospy.logerr(f"错误堆栈: {traceback.format_exc()}")
             return None, 0, True, {}
@@ -409,7 +520,7 @@ class RobotEnv:
         """验证机器人状态"""
         try:
             # 发布一个小的测试动作
-            test_action = np.array([0.1, 0.0, 0.0, -1.736, 0.0, 0.0, 0.0])
+            test_action = np.array([1, 0.0, 0.0, 0, 0.0, 0.0, 0.0])
             initial_state = self.current_state[:7].copy()
             
             # 执行测试动作
@@ -434,12 +545,12 @@ def train():
     agent = PPOAgent(env.state_dim, env.action_dim)
     
     # 验证机器人状态
-    if not env._verify_robot_state():
-        rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
-        return
+    # if not env._verify_robot_state():
+    #     rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
+    #     return
     
     # 训练参数
-    max_episodes = 1000
+    max_episodes = 100
     episode_rewards = []
     
     for ep in range(max_episodes):
@@ -504,3 +615,9 @@ def train():
         rospy.logerr(f"保存模型失败: {str(e)}")
 
 
+
+if __name__ == "__main__":
+    try:
+        train()
+    except rospy.ROSInterruptException:
+        pass

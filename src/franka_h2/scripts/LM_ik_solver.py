@@ -271,6 +271,7 @@ class LM_ik_solver():
             rospy.sleep(1.0 / 50)
 
         rospy.loginfo("运动完成！")
+        
 
 panda = rtb.models.URDF.Panda()
 # print(panda)
@@ -340,6 +341,7 @@ if __name__ == '__main__':
     # solve_ik.move_robot_arm(point_sol.q)
 
     solve_ik.move_to_goal(point_sol.q, duration=10.0)
+    print(solve_ik.current_joint_positions)
     
     print("Robotic arm has successfully reached the goal!")
      
