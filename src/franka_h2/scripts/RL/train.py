@@ -386,7 +386,7 @@ class RobotEnv:
         """验证机器人状态"""
         try:
             # 发布一个小的测试动作
-            test_action = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            test_action = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             initial_state = self.current_state[:7].copy()
             
             # 执行测试动作
@@ -461,6 +461,8 @@ def train():
                 if len(memory) >= agent.batch_size:
                     agent.update_policy(*zip(*memory))
                     memory = []
+                
+                print(f"Step {step}, Action: {action}, Reward: {reward:.2f}")
                     
             except Exception as e:
                 rospy.logerr(f"训练步骤出错: {str(e)}")
