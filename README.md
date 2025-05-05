@@ -45,5 +45,5 @@ CSI.py：含中间点的三次样条差值规划中用到的插值求解器类
 
 NSGA-2.py：测试NSGA-2群优化算法
 
-
+plot_cal.py：根据ROS速度、力矩消息进行position, velocity, acceleration, torque, loss function（计算和NSGA中一致）-t图像绘制
 
