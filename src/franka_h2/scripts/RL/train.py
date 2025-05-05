@@ -38,18 +38,32 @@ class RobotEnv:
         # ROS初始化
         rospy.init_node('rl_arm_control')
         
-        # 初始化标准轨迹动作客户端
+        # # 初始化标准轨迹动作客户端
+        # self.arm_client = actionlib.SimpleActionClient(
+        #     'panda_controller/follow_joint_trajectory', 
+        #     FollowJointTrajectoryAction
+        # )
+        # self.arm_client.wait_for_server()
+        # self.arm_client.done_cb = self._handle_action_done  # 注册回调
+        # # 利用actionlib提供的接口对Gazebo中的机械臂进行控制并获取回调更新位置状态
         self.arm_client = actionlib.SimpleActionClient(
             'panda_controller/follow_joint_trajectory', 
             FollowJointTrajectoryAction
         )
-        self.arm_client.wait_for_server()
-        self.arm_client.done_cb = self._handle_action_done  # 注册回调
-        # 利用actionlib提供的接口对Gazebo中的机械臂进行控制并获取回调更新位置状态
+        if not self.arm_client.wait_for_server(rospy.Duration(10.0)):
+            rospy.logerr("Action server not available!")
+            raise RuntimeError("Action server not available!")
 
         
         # 构建URDF文件路径
         self.urdf_path = os.path.join(pkg_path, 'urdf', 'panda_robot_gazebo.urdf')
+
+        # 添加机器人模型作为类成员
+        self.panda = rtb.models.URDF.Panda()
+        
+        # 添加状态标志
+        self.state_updated = False
+        self.last_update_time = rospy.Time.now()
         
         # 状态参数
         self.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 
@@ -57,19 +71,28 @@ class RobotEnv:
         self.state_dim = 7 * 3 + 3  # 7关节(位置+速度+力矩) + 末端位置
         self.action_dim = 7
         # 初始化状态存储
+        # 状态存储
         self.current_state = None
         self.current_joint_positions = None
+        self.current_joint_velocities = None
+        self.current_joint_efforts = None
+        self.current_ee_pos = None
         
-        # 订阅者和发布者
-        self.state_sub = rospy.Subscriber('/joint_states', JointState, self.state_cb)
+        # 订阅者
+        self.state_sub = rospy.Subscriber(
+            '/joint_states', 
+            JointState, 
+            self.state_cb,
+            queue_size=10
+        )
         # 控制运动的消息的发布
         self.cmd_pub = rospy.Publisher('/joint_trajectory', JointTrajectory, queue_size=10)
         # 这里可以是自定义消息的发布器用来绘图
         self.traj_pub = rospy.Publisher('/trajectory_data', TrajectoryData, queue_size=10)
 
-        # 等待第一次接收到关节状态
+        # 等待第一次状态更新
         rospy.loginfo("等待接收第一帧关节状态...")
-        while self.current_state is None and not rospy.is_shutdown():
+        while not self.state_updated and not rospy.is_shutdown():
             rospy.sleep(0.1)
         rospy.loginfo("成功接收到关节状态！")
         
@@ -105,32 +128,56 @@ class RobotEnv:
             self.current_joint_positions = result.actual.positions
         
     def state_cb(self, msg):
-        """状态回调函数"""
+        """改进的状态回调函数"""
         try:
-            # 打印接收到的消息，验证数据
-            rospy.logdebug(f"接收到关节状态消息: pos={msg.position[:7]}")
-            
-            # 解析关节状态：位置、速度、力矩
+            # 提取关节状态
             joint_pos = np.array(msg.position[:7])
             joint_vel = np.array(msg.velocity[:7] if msg.velocity else [0.0]*7)
             joint_eff = np.array(msg.effort[:7] if msg.effort else [0.0]*7)
             
-            # 获取末端执行器位置
-            panda = rtb.models.URDF.Panda()
-            T = panda.fkine(joint_pos)
+            # 计算末端执行器位置
+            T = self.panda.fkine(joint_pos)
             end_effector_pos = np.array([T.t[0], T.t[1], T.t[2]])
             
-            # 更新状态
+            # 使用锁保护状态更新
             with self.position_lock:
+                # 更新各个状态组件
+                self.current_joint_positions = joint_pos
+                self.current_joint_velocities = joint_vel
+                self.current_joint_efforts = joint_eff
+                self.current_ee_pos = end_effector_pos
+                
+                # 构建完整状态向量
                 self.current_state = np.concatenate([
                     joint_pos, joint_vel, joint_eff, end_effector_pos
                 ])
-                self.current_joint_positions = joint_pos
+                
+                # 更新状态标志
+                self.state_updated = True
+                self.last_update_time = rospy.Time.now()
             
-            rospy.logdebug("状态更新成功")
+            rospy.logdebug(f"状态更新成功: pos={joint_pos}")
             
         except Exception as e:
             rospy.logerr(f"状态回调处理错误: {str(e)}")
+    
+    def wait_for_state_update(self, timeout=1.0):
+        """等待状态更新的辅助函数"""
+        start_time = rospy.Time.now()
+        rate = rospy.Rate(50)  # 50Hz检查频率
+        
+        while not rospy.is_shutdown():
+            if (rospy.Time.now() - start_time).to_sec() > timeout:
+                return False
+                
+            with self.position_lock:
+                if self.state_updated:
+                    self.state_updated = False  # 重置标志
+                    return True
+            
+            rate.sleep()
+        
+        return False
     
     def _load_inertia_params(self):
         """从URDF中提取完整的惯性参数（质量、转动惯量矩阵、质心位置）"""
@@ -207,93 +254,93 @@ class RobotEnv:
         
         return total_reward
     
+    def generate_trajectory(self, current_pos, next_pos, duration=1.0, freq=50):
+        """生成完整的轨迹"""
+        num_points = int(duration * freq)
+        t = np.linspace(0, duration, num_points)
+        positions = []
+        velocities = []
+        
+        for ti in t:
+            # 五次多项式插值
+            normalized_time = ti / duration
+            s = 10 * normalized_time**3 - 15 * normalized_time**4 + 6 * normalized_time**5
+            s_dot = (30 * normalized_time**2 - 60 * normalized_time**3 + 30 * normalized_time**4) / duration
+            
+            pos = []
+            vel = []
+            for i in range(len(current_pos)):
+                delta = next_pos[i] - current_pos[i]
+                pos.append(current_pos[i] + s * delta)
+                vel.append(s_dot * delta)
+            
+            positions.append(pos)
+            velocities.append(vel)
+            
+        return positions, velocities, t
+    
     def step(self, action):
-        # 保存旧状态用于验证
-        old_state = self.current_state.copy() if self.current_state is not None else None
-
-        # 打印动作值
-        print("Action:", action)
-
-        # 创建轨迹消息
-        cmd_msg = JointTrajectory()
-        cmd_msg.joint_names = self.joint_names
-
-        # 获取当前状态作为起点
-        with self.position_lock:
-            if self.current_state is None:
-                rospy.logwarn("当前状态为空，无法执行动作！")
+        """改进的step函数"""
+        try:
+            # 保存旧状态
+            with self.position_lock:
+                if self.current_state is None:
+                    rospy.logwarn("当前状态为空，无法执行动作！")
+                    return None, 0, True, {}
+                old_state = self.current_state.copy()
+                current_pos = self.current_joint_positions.copy()
+            
+            # 计算目标位置
+            action = action.flatten()
+            next_pos = (np.array(current_pos) + action * 0.1).tolist()
+            
+            # 生成和发送轨迹
+            positions, velocities, timestamps = self.generate_trajectory(
+                current_pos, next_pos, duration=1.0
+            )
+            
+            # 创建并发送轨迹消息
+            traj_msg = JointTrajectory()
+            traj_msg.joint_names = self.joint_names
+            
+            for i in range(len(timestamps)):
+                point = JointTrajectoryPoint()
+                point.positions = positions[i]
+                point.velocities = velocities[i]
+                point.time_from_start = rospy.Duration(timestamps[i])
+                traj_msg.points.append(point)
+            
+            # 发送轨迹
+            goal = FollowJointTrajectoryGoal()
+            goal.trajectory = traj_msg
+            self.arm_client.send_goal(goal)
+            
+            # 等待动作完成和状态更新
+            if not self.arm_client.wait_for_result(rospy.Duration(2.0)):
+                rospy.logwarn("动作执行超时！")
                 return None, 0, True, {}
             
-            current_pos = self.current_joint_positions[:7]
-            current_pos = [float(x) for x in current_pos]
-
-        # 计算目标位置
-        action = action.flatten()
-        next_pos = (np.array(current_pos) + action * 0.1).tolist()
-
-        # 生成完整轨迹点序列（使用梯形速度曲线）
-        duration = 1.0  # 1秒执行时间
-        num_points = 50  # 50个轨迹点
-        timestamps = np.linspace(0, duration, num_points)
-
-        # 为每个关节生成轨迹
-        for i in range(num_points):
-            point = JointTrajectoryPoint()
-            # 线性插值计算位置
-            alpha = timestamps[i] / duration
-            point.positions = [current_pos[j] + (next_pos[j] - current_pos[j]) * alpha 
-                            for j in range(len(self.joint_names))]
-            
-            # 计算速度（梯形速度曲线）
-            if i < num_points/4:  # 加速段
-                vel_scale = 4 * i / num_points
-            elif i > 3*num_points/4:  # 减速段
-                vel_scale = 4 * (num_points - i) / num_points
-            else:  # 匀速段
-                vel_scale = 1.0
-            
-            point.velocities = [(next_p - curr_p) * vel_scale / duration 
-                            for next_p, curr_p in zip(next_pos, current_pos)]
-            point.time_from_start = rospy.Duration(timestamps[i])
-            cmd_msg.points.append(point)
-
-        # 使用actionlib发送和等待
-        goal = FollowJointTrajectoryGoal(trajectory=cmd_msg)
-        self.arm_client.send_goal(goal)
-        
-        # 等待动作执行完成
-        if not self.arm_client.wait_for_result(rospy.Duration(2.0)):
-            rospy.logwarn("动作执行超时！")
-            return None, 0, True, {}
-
-        # 等待状态更新
-        update_timeout = 0.5
-        start_time = rospy.Time.now()
-        rate = rospy.Rate(50)
-        
-        while not rospy.is_shutdown():
-            if (rospy.Time.now() - start_time).to_sec() > update_timeout:
+            # 等待状态更新
+            if not self.wait_for_state_update(timeout=0.5):
                 rospy.logwarn("等待状态更新超时")
-                break
-                
+                return None, 0, True, {}
+            
+            # 获取新状态并验证变化
             with self.position_lock:
-                if self.current_state is not None:
-                    state_copy = self.current_state.copy()
-                    # 验证状态是否真的更新
-                    if not np.allclose(state_copy[:7], old_state[:7]):
-                        break
-                    
-            rate.sleep()
-
-        # 验证状态变化
-        state_change = np.linalg.norm(self.current_state - old_state)
-        print("State change:", state_change)
-        
-        if state_change < 1e-6:
-            rospy.logwarn("状态似乎没有更新！")
+                new_state = self.current_state.copy()
+            
+            state_change = np.linalg.norm(new_state[:7] - old_state[:7])
+            rospy.loginfo(f"状态变化量: {state_change}")
+            
+            if state_change < 1e-6:
+                rospy.logwarn("状态似乎没有更新！")
+                return None, 0, True, {}
+            
+            return new_state, self.calculate_reward(action), False, {}
+            
+        except Exception as e:
+            rospy.logerr(f"执行动作时出错: {str(e)}")
             return None, 0, True, {}
-
-        return state_copy, self.calculate_reward(action), False, {}
     
     def reset(self):
         """重置环境到初始状态"""
@@ -361,6 +408,7 @@ def train():
     # 初始化环境和智能体
     env = RobotEnv()
     agent = PPOAgent(env.state_dim, env.action_dim)
+    
     # 验证机器人状态
     if not env._verify_robot_state():
         rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
@@ -373,46 +421,60 @@ def train():
     for ep in range(max_episodes):
         if ep % 10 == 0 and agent.episode_length > agent.min_ep_length:
             agent.episode_length = int(agent.episode_length * agent.decay_rate)
-            
+        
+        # 重置环境并确保获得有效状态
         state = env.reset()
+        if state is None:
+            rospy.logerr("无法获取初始状态，跳过此回合")
+            continue
+            
         episode_reward = 0
         memory = []
         
         for step in range(agent.episode_length):
-            # 确保状态是正确的格式
-            state_tensor = torch.FloatTensor(state)
-            if len(state_tensor.shape) == 1:
-                state_tensor = state_tensor.unsqueeze(0)
-            
-            # 获取动作
-            action, _ = agent.policy(state_tensor)
-            # 正确处理动作数据
-            action = action.detach().squeeze(0).numpy()  # 确保是numpy数组并移除多余的维度
-            
-            # 执行动作
-            next_state, reward, done, _ = env.step(action)
-            
-            # 存储经验
-            memory.append((state, action, reward, next_state, done))
-            
-            # 更新状态和奖励
-            state = next_state
-            episode_reward += reward
-            
-            if len(memory) >= agent.batch_size:
-                agent.update_policy(*zip(*memory))
-                memory = []
+            try:
+                # 确保状态是正确的格式
+                state_tensor = torch.FloatTensor(state).unsqueeze(0)
                 
+                # 获取动作
+                action, _ = agent.policy(state_tensor)
+                action = action.detach().squeeze(0).numpy()
+                
+                # 执行动作并获取下一个状态
+                next_state, reward, done, _ = env.step(action)
+                
+                # 验证next_state是否有效
+                if next_state is None:
+                    rospy.logwarn("获取到无效的next_state，结束当前回合")
+                    break
+                
+                # 存储经验
+                memory.append((state, action, reward, next_state, done))
+                
+                # 更新状态和奖励
+                state = next_state
+                episode_reward += reward
+                
+                if done:
+                    break
+                
+                if len(memory) >= agent.batch_size:
+                    agent.update_policy(*zip(*memory))
+                    memory = []
+                    
+            except Exception as e:
+                rospy.logerr(f"训练步骤出错: {str(e)}")
+                break
+        
         episode_rewards.append(episode_reward)
         print(f"Episode {ep}, Reward: {episode_reward:.2f}, Length: {agent.episode_length}")
     
-    pth_path = os.path.join(pkg_path, 'scripts/RL/pth', 'arm_ppo.pth')
-    torch.save(agent.policy.state_dict(), pth_path)
-
-if __name__ == "__main__":
+    # 保存模型
     try:
-        train()
-    except rospy.ROSInterruptException:
-        pass
+        pth_path = os.path.join(pkg_path, 'scripts/RL/pth', 'arm_ppo.pth')
+        torch.save(agent.policy.state_dict(), pth_path)
+        print(f"模型已保存到: {pth_path}")
+    except Exception as e:
+        rospy.logerr(f"保存模型失败: {str(e)}")
 
 

@@ -194,7 +194,7 @@ class JointStateLogger:
                 label='Energy Objective', color='red')
         plt.ylabel('Objective Value')
         plt.xlabel('Time (s)')
-        plt.title('NSGA-II Objective Functions')
+        plt.title('Loss Functions')
         plt.grid(True)
         plt.legend()
         

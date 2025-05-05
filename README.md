@@ -47,3 +47,9 @@ NSGA-2.py：测试NSGA-2群优化算法
 
 plot_cal.py：根据ROS速度、力矩消息进行position, velocity, acceleration, torque, loss function（计算和NSGA中一致）-t图像绘制
 
+
+
+
+
+
+

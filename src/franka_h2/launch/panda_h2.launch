@@ -45,12 +45,19 @@
 
     <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
 
-    <node 
+    <!-- <node 
         pkg="franka_h2" 
         type="LM_ik_solver.py" 
         name="ik_solver" 
         output="screen"
-    />
+    /> -->
+
+    <!-- <node 
+        pkg="franka_h2" 
+        type="RRT.py" 
+        name="RRT_solver" 
+        output="screen"
+    /> -->
 
     <!-- <arg name="sim_mode" default="true" />
     <arg name="record_video" default="true" />
@@ -63,12 +70,12 @@
         output="screen"
     /> -->
 
-    <!-- <node 
+    <node 
         pkg="franka_h2" 
         type="NSGA-2.py" 
         name="CSI_solver" 
         output="screen"
-    /> -->
+    />
 
     <node 
         pkg="franka_h2"

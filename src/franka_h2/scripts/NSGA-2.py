@@ -101,19 +101,19 @@ class CSI_solver():
         generations = 100
         crossover_prob = 0.9
         mutation_prob = 0.1
-        variable_ranges = [(-2.5, 2.5),    # 关节1
-    (-2.5, 2.5),    # 关节2
-    (-2.5, 2.5),    # 关节3
-    (-2.5, 2.5),    # 关节4
-    (-5.0, 5.0),    # 关节5
-    (-4.0, 4.0),    # 关节6
-    (-5.0, 5.0)     ]  # 各关节初始速度范围（需根据实际情况调整）
+        variable_ranges = [[-2.8973, 2.8973],  # joint1
+            [-1.7628, 1.7628],  # joint2
+            [-2.8973, 2.8973],  # joint3
+            [-3.0718, -0.0698], # joint4
+            [-2.8973, 2.8973],  # joint5
+            [-0.0175, 3.7525],  # joint6
+            [-2.8973, 2.8973]    ]  # 各关节初始速度范围（需根据实际情况调整）
 
         # 目标函数计算
         def evaluate(individual):
             """计算单个个体的双目标适应度"""
-            total_smoothness = 0.0
-            total_energy = 0.0
+            total_smoothness = 0.1
+            total_energy = 0.1
             T = duration
 
             for j in range(7):
@@ -139,11 +139,13 @@ class CSI_solver():
                 integral_tau_sq = (I_j**2 * integral_acc_sq) + (2*I_j*g_j*(-v_start)) + (g_j**2 * T)
                 total_energy += integral_tau_sq
 
+                total_energy = total_energy * 1000  # 转换为mJ
+
                 print(f"关节 {joint_name} 的能耗指标: {integral_tau_sq:.4f}")
                 print(f"关节 {joint_name} 的平滑性指标: {integral_acc_sq:.4f}")
         
 
-            return (total_smoothness, total_energy*1000)
+            return (total_smoothness, total_energy)
 
         # 遗传算子
         def crossover(p1, p2):
