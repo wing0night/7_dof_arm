@@ -282,6 +282,8 @@ class RobotEnv:
     def step(self, action):
         """改进的step函数"""
         try:
+            rospy.loginfo("开始执行step函数...")
+            
             # 保存旧状态
             with self.position_lock:
                 if self.current_state is None:
@@ -289,17 +291,23 @@ class RobotEnv:
                     return None, 0, True, {}
                 old_state = self.current_state.copy()
                 current_pos = self.current_joint_positions.copy()
+                rospy.loginfo(f"当前关节位置: {current_pos}")
             
             # 计算目标位置
             action = action.flatten()
             next_pos = (np.array(current_pos) + action * 0.1).tolist()
+            rospy.loginfo(f"动作: {action}")
+            rospy.loginfo(f"计算的目标位置: {next_pos}")
             
             # 生成和发送轨迹
+            rospy.loginfo("开始生成轨迹...")
             positions, velocities, timestamps = self.generate_trajectory(
                 current_pos, next_pos, duration=1.0
             )
+            rospy.loginfo(f"生成了 {len(positions)} 个轨迹点")
             
             # 创建并发送轨迹消息
+            rospy.loginfo("创建轨迹消息...")
             traj_msg = JointTrajectory()
             traj_msg.joint_names = self.joint_names
             
@@ -311,16 +319,19 @@ class RobotEnv:
                 traj_msg.points.append(point)
             
             # 发送轨迹
+            rospy.loginfo("发送轨迹到action server...")
             goal = FollowJointTrajectoryGoal()
             goal.trajectory = traj_msg
             self.arm_client.send_goal(goal)
             
             # 等待动作完成和状态更新
+            rospy.loginfo("等待动作执行完成...")
             if not self.arm_client.wait_for_result(rospy.Duration(2.0)):
                 rospy.logwarn("动作执行超时！")
                 return None, 0, True, {}
             
             # 等待状态更新
+            rospy.loginfo("等待状态更新...")
             if not self.wait_for_state_update(timeout=0.5):
                 rospy.logwarn("等待状态更新超时")
                 return None, 0, True, {}
@@ -328,18 +339,30 @@ class RobotEnv:
             # 获取新状态并验证变化
             with self.position_lock:
                 new_state = self.current_state.copy()
+                rospy.loginfo(f"新的关节位置: {new_state[:7]}")
             
             state_change = np.linalg.norm(new_state[:7] - old_state[:7])
             rospy.loginfo(f"状态变化量: {state_change}")
             
             if state_change < 1e-6:
                 rospy.logwarn("状态似乎没有更新！")
+                rospy.logwarn(f"旧状态: {old_state[:7]}")
+                rospy.logwarn(f"新状态: {new_state[:7]}")
                 return None, 0, True, {}
             
-            return new_state, self.calculate_reward(action), False, {}
+            # 计算奖励
+            rospy.loginfo("计算奖励...")
+            reward = self.calculate_reward(action)
+            rospy.loginfo(f"获得奖励: {reward}")
+            
+            rospy.loginfo("step函数执行完成")
+            return new_state, reward, False, {}
             
         except Exception as e:
             rospy.logerr(f"执行动作时出错: {str(e)}")
+            # 打印更详细的错误信息
+            import traceback
+            rospy.logerr(f"错误堆栈: {traceback.format_exc()}")
             return None, 0, True, {}
     
     def reset(self):
@@ -386,7 +409,7 @@ class RobotEnv:
         """验证机器人状态"""
         try:
             # 发布一个小的测试动作
-            test_action = np.array([0.5, 0.0, 0.0, -1.736, 0.0, 0.0, 0.0])
+            test_action = np.array([0.1, 0.0, 0.0, -1.736, 0.0, 0.0, 0.0])
             initial_state = self.current_state[:7].copy()
             
             # 执行测试动作
