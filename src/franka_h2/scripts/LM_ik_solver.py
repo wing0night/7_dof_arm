@@ -177,7 +177,7 @@ class LM_ik_solver():
             
         return gravity_torques
 
-    def move_to_goal(self, goal_positions, duration=5.0):
+    def move_to_goal(self, goal_positions, duration=10.0):
         if self.current_joint_positions is None:
             rospy.logerr("未获取到当前关节状态！")
             return
@@ -339,7 +339,7 @@ if __name__ == '__main__':
     #move_robot_arm([point_sol[0] , point_sol[1] , point_sol[2] , point_sol[3] , point_sol[4]])
     # solve_ik.move_robot_arm(point_sol.q)
 
-    solve_ik.move_to_goal(point_sol.q, duration=5.0)
+    solve_ik.move_to_goal(point_sol.q, duration=10.0)
     
     print("Robotic arm has successfully reached the goal!")
      

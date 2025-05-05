@@ -139,7 +139,11 @@ class CSI_solver():
                 integral_tau_sq = (I_j**2 * integral_acc_sq) + (2*I_j*g_j*(-v_start)) + (g_j**2 * T)
                 total_energy += integral_tau_sq
 
-            return (total_smoothness, total_energy)
+                print(f"关节 {joint_name} 的能耗指标: {integral_tau_sq:.4f}")
+                print(f"关节 {joint_name} 的平滑性指标: {integral_acc_sq:.4f}")
+        
+
+            return (total_smoothness, total_energy*1000)
 
         # 遗传算子
         def crossover(p1, p2):

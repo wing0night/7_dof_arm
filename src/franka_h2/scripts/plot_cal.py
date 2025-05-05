@@ -105,7 +105,7 @@ class JointStateLogger:
         self.prev_positions = {k: [v[-1]] for k, v in positions.items()}
         self.prev_time = current_time
         
-        return total_smoothness, total_energy
+        return total_smoothness, total_energy*1000
 
     def traj_callback(self, msg):
         # 原有数据收集逻辑
