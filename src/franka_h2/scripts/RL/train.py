@@ -350,7 +350,7 @@ class RobotEnv:
             cmd_msg.joint_names = self.joint_names
             
             # 设置初始关节角度（确保使用float类型）
-            initial_positions = [float(x) for x in [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]]
+            initial_positions = [float(x) for x in [0.0, 0.0, 0.0, -1.736, 0.0, 0, 0]]
             
             # 创建轨迹点
             point = JointTrajectoryPoint()
@@ -386,7 +386,7 @@ class RobotEnv:
         """验证机器人状态"""
         try:
             # 发布一个小的测试动作
-            test_action = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            test_action = np.array([0.5, 0.0, 0.0, -1.736, 0.0, 0.0, 0.0])
             initial_state = self.current_state[:7].copy()
             
             # 执行测试动作
@@ -396,6 +396,7 @@ class RobotEnv:
             if np.allclose(self.current_state[:7], initial_state):
                 rospy.logerr("机器人状态未响应测试动作！")
                 return False
+            print("机器人状态验证成功！")
                 
             return True
             
