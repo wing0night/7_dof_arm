@@ -94,44 +94,6 @@ class CSI_solver():
                     break
         return inertia_params
     
-    def generate_trajectory(self, q_start, q_end, duration, freq = 50):
-        """生成三次样条轨迹"""
-        trajectory = JointTrajectory()
-        trajectory.joint_names = self.joint_names
-        
-        # 时间参数设置
-        # sample_rate = freq  # Hz
-        # dt = 1.0/sample_rate
-        num_points = int(duration * freq)
-        t = np.linspace(0, duration, num_points)
-
-        # 计算各关节参数
-        positions = []
-        velocities = []
-        accelerations = []
-    
-        for ti in t:
-            # t_p = t[i]
-            point = JointTrajectoryPoint()
-            
-            
-            # for j in range(7):
-            # 三次样条计算
-            a0 = q_start
-            a1 = 0.0
-            a2 = 3*(q_end-q_start)/(duration**2)
-            a3 = -2*(q_end-q_start)/(duration**3)
-            
-            pos = a0 + a1*ti + a2*ti**2 + a3*ti**3
-            vel = a1 + 2*a2*ti + 3*a3*ti**2
-            acc = 2*a2 + 6*a3*ti
-            
-            positions.append(pos)
-            velocities.append(vel)
-            accelerations.append(acc)
-            
-        return positions, velocities, t
-    
     def generate_optimized_trajectory(self, q_start, q_end, duration, freq=50):
         """使用NSGA-II优化生成轨迹"""
         # NSGA-II参数设置
@@ -139,7 +101,13 @@ class CSI_solver():
         generations = 100
         crossover_prob = 0.9
         mutation_prob = 0.1
-        variable_ranges = [(-0.5, 0.5)] * 7  # 各关节初始速度范围（需根据实际情况调整）
+        variable_ranges = [(-2.5, 2.5),    # 关节1
+    (-2.5, 2.5),    # 关节2
+    (-2.5, 2.5),    # 关节3
+    (-2.5, 2.5),    # 关节4
+    (-5.0, 5.0),    # 关节5
+    (-4.0, 4.0),    # 关节6
+    (-5.0, 5.0)     ]  # 各关节初始速度范围（需根据实际情况调整）
 
         # 目标函数计算
         def evaluate(individual):
