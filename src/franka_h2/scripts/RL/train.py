@@ -31,6 +31,8 @@ from gazebo_msgs.srv import GetModelState, GetLinkState, GetJointProperties
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Empty
 
+from tqdm import tqdm
+
 # 获取包路径
 rospack = rospkg.RosPack()
 pkg_path = rospack.get_path('franka_h2')
@@ -76,8 +78,7 @@ class RobotEnv:
         # 订阅者
         self.state_sub = rospy.Subscriber(
             '/joint_states', 
-            JointState, 
-            self.state_cb
+            JointState
         )
         # 控制运动的消息的发布
         self.cmd_pub = rospy.Publisher('/joint_trajectory', JointTrajectory, queue_size=10)
@@ -85,10 +86,10 @@ class RobotEnv:
         self.traj_pub = rospy.Publisher('/trajectory_data', TrajectoryData, queue_size=10)
 
         # 等待第一次状态更新
-        rospy.loginfo("等待接收第一帧关节状态...")
-        while not self.state_updated and not rospy.is_shutdown():
-            rospy.sleep(0.1)
-        rospy.loginfo("成功接收到关节状态！")
+        # rospy.loginfo("等待接收第一帧关节状态...")
+        # while not self.state_updated and not rospy.is_shutdown():
+        #     rospy.sleep(0.1)
+        # rospy.loginfo("成功接收到关节状态！")
         
         
         self.target_pos = np.array([0.5, 0.2, 0.5])  # 目标末端位置
@@ -181,7 +182,7 @@ class RobotEnv:
         try:
             # 获取关节属性
             resp = self.get_joint_properties(f"{joint_name}")
-            print(resp)
+            # print(resp)
             if resp.success:
                 return {
                     'position': resp.position[0],
@@ -427,12 +428,12 @@ class RobotEnv:
             return 0.0
             
         # 打印当前状态各部分
-        print("\nCurrent State Components:")
-        print(f"Joint Positions: {self.current_state[:7]}")
-        print(f"Joint Velocities: {self.current_state[7:14]}")
-        print(f"Joint Efforts: {self.current_state[14:21]}")
-        print(f"End Effector Position: {self.current_state[-3:]}")
-        print(f"Target Position: {self.target_pos}")
+        # print("\nCurrent State Components:")
+        # print(f"Joint Positions: {self.current_state[:7]}")
+        # print(f"Joint Velocities: {self.current_state[7:14]}")
+        # print(f"Joint Efforts: {self.current_state[14:21]}")
+        # print(f"End Effector Position: {self.current_state[-3:]}")
+        # print(f"Target Position: {self.target_pos}")
         
         # 位置误差奖励
         pos_error = np.linalg.norm(self.current_state[-3:] - self.target_pos)
@@ -451,15 +452,15 @@ class RobotEnv:
         reward_extra = 10.0 if pos_error < 0.005 else 10 / (1 + 10 * pos_error)
         
         # 打印详细的奖励计算过程
-        print("\nReward Calculation Details:")
-        print(f"Position Error: {pos_error}")
-        print(f"Position Reward: {reward_pos}")
-        print(f"Smoothness Reward: {reward_smooth}")
-        print(f"Energy Reward: {reward_energy}")
-        print(f"Extra Reward: {reward_extra}")
+        # print("\nReward Calculation Details:")
+        # print(f"Position Error: {pos_error}")
+        # print(f"Position Reward: {reward_pos}")
+        # print(f"Smoothness Reward: {reward_smooth}")
+        # print(f"Energy Reward: {reward_energy}")
+        # print(f"Extra Reward: {reward_extra}")
         
         total_reward = reward_pos + reward_smooth + reward_energy + reward_extra
-        print(f"Total Reward: {total_reward}\n")
+        # print(f"Total Reward: {total_reward}\n")
         
         return total_reward
     
@@ -482,7 +483,7 @@ class RobotEnv:
     def step(self, action):
         """改进的step函数，使用action client的反馈机制"""
         try:
-            rospy.loginfo("开始执行step函数...")
+            # rospy.loginfo("开始执行step函数...")
             
             if self.current_state is None:
                 rospy.logwarn("当前状态为空，无法执行动作！")
@@ -533,7 +534,7 @@ class RobotEnv:
             # 获取新状态并验证变化
             new_state = self.current_state.copy()
             state_change = np.linalg.norm(new_state[:7] - old_state[:7])
-            rospy.loginfo(f"状态变化量: {state_change}")
+            # rospy.loginfo(f"状态变化量: {state_change}")
             
             if state_change < 1e-6:
                 rospy.logwarn("状态似乎没有更新！")
@@ -578,6 +579,8 @@ class RobotEnv:
             
             # 等待一小段时间确保状态更新
             rospy.sleep(0.1)
+
+            self.update_state_from_gazebo()
             
             # 确保我们有有效的状态
             while self.current_state is None and not rospy.is_shutdown():
@@ -686,10 +689,13 @@ def train():
     #     return
     
     # 训练参数
-    max_episodes = 100
+    max_episodes = 50
     episode_rewards = []
+
+    progress_bar = tqdm(range(max_episodes), desc="Training", unit="episode")
     
     for ep in range(max_episodes):
+        steps = 0
         if ep % 10 == 0 and agent.episode_length > agent.min_ep_length:
             agent.episode_length = int(agent.episode_length * agent.decay_rate)
         
@@ -733,14 +739,22 @@ def train():
                     agent.update_policy(*zip(*memory))
                     memory = []
                 
-                print(f"Step {step}, Action: {action}, Reward: {reward:.2f}")
+                steps += 1
+                
+                # print(f"Step {step}, Action: {action}, Reward: {reward:.2f}")
+        
                     
             except Exception as e:
                 rospy.logerr(f"训练步骤出错: {str(e)}")
                 break
         
         episode_rewards.append(episode_reward)
-        print(f"Episode {ep}, Reward: {episode_reward:.2f}, Length: {agent.episode_length}")
+        # print(f"Episode {ep}, Reward: {episode_reward:.2f}, Length: {agent.episode_length}")
+        # 更新进度条附加信息
+        progress_bar.set_postfix({
+            "ep_reward": episode_reward,
+            "steps": steps
+        })
     
     # 保存模型
     try:
