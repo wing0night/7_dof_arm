@@ -188,12 +188,13 @@ class RobotEnv:
         """获取指定关节的状态"""
         try:
             # 获取关节属性
-            resp = self.get_joint_properties(f"panda::{joint_name}")
+            resp = self.get_joint_properties(f"{joint_name}")
+            print(resp)
             if resp.success:
                 return {
                     'position': resp.position[0],
                     'rate': resp.rate[0],
-                    'effort': resp.effort[0]
+                    # 'effort': resp.effort[0]
                 }
             else:
                 rospy.logwarn(f"获取关节 {joint_name} 状态失败")
@@ -210,6 +211,75 @@ class RobotEnv:
             if state:
                 joint_states[joint_name] = state
         return joint_states
+    
+    def calculate_joint_efforts(self, positions, velocities, prev_velocities=None, dt=0.02):
+        """计算关节力矩
+        Args:
+            positions: 当前关节位置
+            velocities: 当前关节速度
+            prev_velocities: 上一时刻关节速度（用于计算加速度）
+            dt: 时间间隔（默认0.02s，对应50Hz）
+        """
+        try:
+            efforts = []
+            
+            # 计算加速度
+            if prev_velocities is not None:
+                accelerations = [(v - pv)/dt for v, pv in zip(velocities, prev_velocities)]
+            else:
+                accelerations = [0.0] * len(velocities)
+            
+            # 计算重力矩
+            g = 9.81  # 重力加速度
+            
+            for i, joint_name in enumerate(self.joint_names):
+                # 获取关节参数
+                params = self.inertia_params.get(joint_name)
+                if not params:
+                    rospy.logwarn(f"未找到关节 {joint_name} 的惯性参数")
+                    efforts.append(0.0)
+                    continue
+                
+                # 解包参数
+                mass = params['mass']
+                com = np.array(params['com_position'])
+                inertia_matrix = np.array(params['inertia_matrix'])
+                
+                # 1. 计算重力矩
+                # 基坐标系重力矢量
+                base_gravity = np.array([0, 0, -g])
+                # 简化的重力矩计算（假设关节坐标系与基坐标系对齐）
+                gravity_torque = np.cross(com, mass * base_gravity)[2]  # 取Z轴分量
+                
+                # 2. 计算惯性力矩
+                # 使用转动惯量矩阵的Z轴分量（因为关节绕Z轴转动）
+                inertia = inertia_matrix[2][2]
+                inertial_torque = inertia * accelerations[i]
+                
+                # 3. 计算科里奥利力和离心力（简化模型）
+                # 使用当前速度的平方来近似
+                coriolis_centrifugal = 0.1 * mass * velocities[i]**2  # 系数0.1是一个经验值，可以调整
+                
+                # 4. 计算摩擦力（简化模型）
+                # 使用粘性摩擦系数
+                viscous_friction = 0.1 * velocities[i]  # 粘性摩擦系数为0.1，可以调整
+                # 库仑摩擦（符号函数）
+                coulomb_friction = 0.05 * np.sign(velocities[i])  # 库仑摩擦系数为0.05，可以调整
+                
+                # 合计所有力矩
+                total_torque = (gravity_torque + 
+                            inertial_torque + 
+                            coriolis_centrifugal + 
+                            viscous_friction + 
+                            coulomb_friction)
+                
+                efforts.append(total_torque)
+                
+            return np.array(efforts)
+            
+        except Exception as e:
+            rospy.logerr(f"计算关节力矩时出错: {str(e)}")
+            return np.zeros(len(self.joint_names))
     
     def update_state_from_gazebo(self):
         """使用Gazebo数据更新机器人状态"""
@@ -231,8 +301,20 @@ class RobotEnv:
                         state = joint_states[joint_name]
                         positions.append(state['position'])
                         velocities.append(state['rate'])
-                        efforts.append(state['effort'])
+                        # efforts.append(state['effort'])
                 
+                positions = np.array(positions)
+                velocities = np.array(velocities)
+                
+                # 计算力矩
+                efforts = self.calculate_joint_efforts(
+                    positions,
+                    velocities,
+                    self.current_joint_velocities,  # 使用上一时刻的速度
+                    dt=0.02  # 假设50Hz的更新频率
+                )
+
+
                 self.current_joint_positions = np.array(positions)
                 self.current_joint_velocities = np.array(velocities)
                 self.current_joint_efforts = np.array(efforts)
@@ -545,9 +627,9 @@ def train():
     agent = PPOAgent(env.state_dim, env.action_dim)
     
     # 验证机器人状态
-    # if not env._verify_robot_state():
-    #     rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
-    #     return
+    if not env._verify_robot_state():
+        rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
+        return
     
     # 训练参数
     max_episodes = 100
