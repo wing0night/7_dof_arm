@@ -619,6 +619,68 @@ class RobotEnv:
         except Exception as e:
             rospy.logerr(f"状态验证失败: {str(e)}")
             return False
+    
+    def plot_training_rewards(self, rewards, save_path):
+        """
+        绘制训练奖励曲线
+        Args:
+            episode_rewards: 每个episode的奖励列表
+            save_path: 图片保存路径（可选）
+        """
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # 创建图表
+            plt.figure(figsize=(10, 6))
+            
+            # 绘制原始奖励曲线
+            episodes = range(1, len(rewards) + 1)
+            plt.plot(episodes, rewards, 'b-', alpha=0.3, label='origin reward')
+            
+            # 计算移动平均
+            window_size = 5
+            if len(rewards) >= window_size:
+                moving_avg = np.convolve(rewards, 
+                                    np.ones(window_size)/window_size, 
+                                    mode='valid')
+                plt.plot(range(window_size, len(rewards) + 1), 
+                        moving_avg, 'r-', label=f'{window_size}move avg')
+            
+            # 添加统计信息
+            mean_reward = np.mean(rewards)
+            std_reward = np.std(rewards)
+            max_reward = np.max(rewards)
+            min_reward = np.min(rewards)
+            
+            # 设置图表属性
+            plt.title('Reward Curve')
+            plt.xlabel('Round')
+            plt.ylabel('Total Reward')
+            plt.grid(True, linestyle='--', alpha=0.7)
+            plt.legend()
+            
+            # 添加统计信息文本框
+            stats_text = f'info:\n' \
+                        f'mean reward: {mean_reward:.2f}\n' \
+                        f'std reward: {std_reward:.2f}\n' \
+                        f'max reward: {max_reward:.2f}\n' \
+                        f'min reward: {min_reward:.2f}'
+            plt.text(0.02, 0.98, stats_text,
+                    transform=plt.gca().transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            # 保存图片（如果指定了保存路径）
+            if save_path:
+                plt.savefig(save_path, bbox_inches='tight')
+                rospy.loginfo(f"训练曲线已保存到: {save_path}")
+            
+            # 显示图表
+            plt.show()
+            
+        except Exception as e:
+            rospy.logerr(f"绘制训练曲线时出错: {str(e)}")
 
 def train():
     """主训练循环"""
@@ -627,12 +689,12 @@ def train():
     agent = PPOAgent(env.state_dim, env.action_dim)
     
     # 验证机器人状态
-    if not env._verify_robot_state():
-        rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
-        return
+    # if not env._verify_robot_state():
+    #     rospy.logerr("机器人状态验证失败，请检查控制器和传感器！")
+    #     return
     
     # 训练参数
-    max_episodes = 100
+    max_episodes = 50
     episode_rewards = []
     
     for ep in range(max_episodes):
@@ -693,6 +755,12 @@ def train():
         pth_path = os.path.join(pkg_path, 'scripts/RL/pth', 'arm_ppo.pth')
         torch.save(agent.policy.state_dict(), pth_path)
         print(f"模型已保存到: {pth_path}")
+
+        # 绘制并保存训练曲线
+        plot_path = os.path.join(pkg_path, 'scripts/RL/plots', 'training_rewards.png')
+        # 确保保存目录存在
+        # os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+        env.plot_training_rewards(episode_rewards, plot_path)
     except Exception as e:
         rospy.logerr(f"保存模型失败: {str(e)}")
 
