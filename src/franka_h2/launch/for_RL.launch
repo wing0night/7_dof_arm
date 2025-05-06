@@ -51,6 +51,12 @@
         name="train_RL" 
         output="screen"
     />
+    <!-- <node 
+        pkg="franka_h2" 
+        type="deploy.py" 
+        name="deploy_RL" 
+        output="screen"
+    /> -->
 
     <!-- <node 
         pkg="franka_h2" 

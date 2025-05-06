@@ -43,14 +43,6 @@ class RobotEnv:
         # ROS初始化
         rospy.init_node('rl_arm_control')
         
-        # # 初始化标准轨迹动作客户端
-        # self.arm_client = actionlib.SimpleActionClient(
-        #     'panda_controller/follow_joint_trajectory', 
-        #     FollowJointTrajectoryAction
-        # )
-        # self.arm_client.wait_for_server()
-        # self.arm_client.done_cb = self._handle_action_done  # 注册回调
-        # # 利用actionlib提供的接口对Gazebo中的机械臂进行控制并获取回调更新位置状态
         self.arm_client = actionlib.SimpleActionClient(
             'panda_controller/follow_joint_trajectory', 
             FollowJointTrajectoryAction
@@ -694,7 +686,7 @@ def train():
     #     return
     
     # 训练参数
-    max_episodes = 50
+    max_episodes = 100
     episode_rewards = []
     
     for ep in range(max_episodes):
