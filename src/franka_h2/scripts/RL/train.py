@@ -28,7 +28,7 @@ from threading import Lock
 
 from gazebo_msgs.msg import ModelStates, LinkStates
 from gazebo_msgs.srv import GetModelState, GetLinkState, GetJointProperties
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension
 from std_srvs.srv import Empty
 
 from tqdm import tqdm
@@ -82,6 +82,8 @@ class RobotEnv:
         self.position_ee = None
         self.position_ee_tar = None
         self.axis_angle_tar = None
+
+        self.max_joint_velocity = 3.14
         
         # 订阅者
         self.state_sub = rospy.Subscriber(
@@ -98,6 +100,13 @@ class RobotEnv:
         # while not self.state_updated and not rospy.is_shutdown():
         #     rospy.sleep(0.1)
         # rospy.loginfo("成功接收到关节状态！")
+
+        self.velocity_pub = rospy.Publisher(
+            '/arm_controller/command',  # 示例topic
+            Float64MultiArray, 
+            queue_size=1
+        )
+        self.dt = 3.0 # step中的时间间隔
         
         
         self.target_pos = np.array([0.5, 0.2, 0.5])  # 目标末端位置
@@ -112,11 +121,12 @@ class RobotEnv:
         ])
         
         # 创建4x4单位矩阵
-        self.T_tar = np.eye(4)
-        # 填入旋转部分 (左上3x3)
-        self.T_tar[:3, :3] = self.R_custom
-        # 填入平移部分 (前三行第四列)
-        self.T_tar[:3, 3] = [self.x, self.y, self.z]
+        # self.T_tar = np.eye(4)
+        # # 填入旋转部分 (左上3x3)
+        # self.T_tar[:3, :3] = self.R_custom
+        # # 填入平移部分 (前三行第四列)
+        # self.T_tar[:3, 3] = [self.x, self.y, self.z]
+        self.T_tar = cal_fk([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
         
         # 加载URDF并解析惯性参数
         self.robot = URDF.from_xml_file(self.urdf_path)
@@ -495,76 +505,50 @@ class RobotEnv:
         
         return positions, velocities, t
     
+    def _scale_action(self, action):
+        """将归一化动作映射到物理速度范围"""
+        # 示例：若policy输出层用tanh激活
+        return action * self.max_joint_velocity  # max_joint_velocity=3.14
+    
     def step(self, action):
-        """改进的step函数，使用action client的反馈机制"""
-        try:
-            # rospy.loginfo("开始执行step函数...")
-            
-            if self.current_state is None:
-                rospy.logwarn("当前状态为空，无法执行动作！")
-                return None, 0, True, {}
-                
-            old_state = self.current_state.copy()
-            current_pos = self.current_joint_positions.copy()
-            
-            # 计算目标位置
-            action = action.flatten()
-            next_pos = (np.array(current_pos) + action * 0.1).tolist()
-            
-            # 创建轨迹消息
-            traj_msg = JointTrajectory()
-            traj_msg.joint_names = self.joint_names
-            duration = 3.0
-            
-            # 创建轨迹点
-            point = JointTrajectoryPoint()
-            point.positions = next_pos
-            point.velocities = [0.0] * len(self.joint_names)
-            point.time_from_start = rospy.Duration(duration)
-            traj_msg.points.append(point)
-            
-            # 创建动作目标
-            goal = FollowJointTrajectoryGoal()
-            goal.trajectory = traj_msg
-            
-            # 定义反馈回调
-            self.action_completed = False
-            self.latest_feedback = None
-            
-            # 发送目标并注册回调
-            self.arm_client.send_goal(
-                goal
-            )
-            
-            # 等待动作完成
-            if not self.arm_client.wait_for_result(rospy.Duration(5.0)):
-                rospy.logwarn("动作执行超时！")
-                return None, 0, True, {}
-            
-            # 直接从Gazebo获取最新状态
-            if not self.update_state_from_gazebo():
-                rospy.logwarn("无法从Gazebo更新状态")
-                return None, 0, True, {}
-            
-            # 获取新状态并验证变化
-            new_state = self.current_state.copy()
-            state_change = np.linalg.norm(new_state[:7] - old_state[:7])
-            # rospy.loginfo(f"状态变化量: {state_change}")
-            
-            if state_change < 1e-6:
-                rospy.logwarn("状态似乎没有更新！")
-                return None, 0, True, {}
-            
-            # 计算奖励
-            reward = self.calculate_reward(action)
-            
-            return new_state, reward, False, {}
-            
-        except Exception as e:
-            rospy.logerr(f"执行动作时出错: {str(e)}")
-            import traceback
-            rospy.logerr(f"错误堆栈: {traceback.format_exc()}")
+        # 动作解析为关节速度 (需缩放至物理合理范围)
+        scaled_vel = self._scale_action(action)  # 示例缩放至[-2π, 2π] rad/s
+        
+        # 创建速度消息
+        vel_msg = Float64MultiArray()
+        
+        # 设置数据布局（可选但推荐）
+        vel_msg.layout.dim = [MultiArrayDimension()]
+        vel_msg.layout.dim[0].label = "velocity"
+        vel_msg.layout.dim[0].size = len(action)
+        vel_msg.layout.dim[0].stride = 1
+        
+        # 填充速度数据
+        scaled_vel = self._scale_action(action)
+        vel_msg.data = scaled_vel.tolist()
+        
+        # 发布消息
+        self.velocity_pub.publish(vel_msg)
+        
+        # 等待物理引擎更新 (关键参数)
+        rospy.sleep(self.dt * 0.8)  # 需略小于控制周期
+        
+        # 获取新状态
+        # 直接从Gazebo获取最新状态
+        if not self.update_state_from_gazebo():
+            rospy.logwarn("无法从Gazebo更新状态")
             return None, 0, True, {}
+        
+        # 获取新状态并验证变化
+        new_state = self.current_state.copy()
+        
+        # 计算奖励
+        reward = self.calculate_reward(action)
+        
+        # 终止判断
+        done = True
+        
+        return new_state, reward, done, {}
     
     def reset(self):
         """重置环境到初始状态"""
@@ -574,7 +558,8 @@ class RobotEnv:
             cmd_msg.joint_names = self.joint_names
             
             # 设置初始关节角度（确保使用float类型）
-            initial_positions = [float(x) for x in [0.0, 0.0, 0.0, -1.736, 0.0, 0, 0]]
+            # initial_positions = [float(x) for x in [0.0, 0.0, 0.0, -1.736, 0.0, 0, 0]]
+            initial_positions = [float(x) for x in [0.0, 0.0, 0.0, 0, 0.0, 0, 0]]
             
             # 创建轨迹点
             point = JointTrajectoryPoint()
@@ -704,7 +689,7 @@ def train():
     #     return
     
     # 训练参数
-    max_episodes = 30
+    max_episodes = 50
     episode_rewards = []
 
     progress_bar = tqdm(range(max_episodes), desc="Training", unit="episode")

@@ -63,12 +63,23 @@ class ArmController:
         self.current_joint_efforts = None
         self.current_ee_pos = None
 
-        # 创建4x4单位矩阵
-        self.T_tar = np.eye(4)
-        # 填入旋转部分 (左上3x3)
-        self.T_tar[:3, :3] = self.R_custom
-        # 填入平移部分 (前三行第四列)
-        self.T_tar[:3, 3] = [self.x, self.y, self.z]
+        # 定义目标位置和旋转
+        self.x = 0.5
+        self.y = 0.2
+        self.z = 0.5
+        self.R_custom = np.array([
+            [0, -1, 0],
+            [1, 0, 0],
+            [0, 0, 1]
+        ])
+
+        # # 创建4x4单位矩阵
+        # self.T_tar = np.eye(4)
+        # # 填入旋转部分 (左上3x3)
+        # self.T_tar[:3, :3] = self.R_custom
+        # # 填入平移部分 (前三行第四列)
+        # self.T_tar[:3, 3] = [self.x, self.y, self.z]
+        self.T_tar = cal_fk([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
 
         # 构建URDF文件路径
         self.urdf_path = os.path.join(pkg_path, 'urdf', 'panda_robot_gazebo.urdf')
