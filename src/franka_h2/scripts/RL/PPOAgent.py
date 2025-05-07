@@ -9,8 +9,8 @@ class PPOAgent:
         self.gamma = 0.99       # 折扣因子
         self.epsilon = 0.2      # PPO截断参数
         self.batch_size = 64    # 批大小。使用较小的批次大小，提高CPU训练速度
-        self.epochs = 10        # 优化轮次
-        self.lr = 3e-4         # 学习率
+        self.epochs = 5        # 优化轮次
+        self.lr = 1e-4         # 学习率
         
         # 使用CPU进行训练
         self.device = torch.device("cpu")
