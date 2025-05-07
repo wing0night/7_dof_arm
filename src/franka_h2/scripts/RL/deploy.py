@@ -14,6 +14,8 @@ from PPONetwork import PPONetwork
 
 from gazebo_msgs.srv import GetModelState, GetLinkState, GetJointProperties
 
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension
+
 from threading import Lock
 from urdf_parser_py.urdf import URDF
 from fk import cal_fk
@@ -38,6 +40,8 @@ class ArmController:
             raise
             
         self.policy.eval()  # 设置为评估模式
+
+        self.dt = 3.0
         
         # ROS配置
         self.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 
@@ -86,6 +90,12 @@ class ArmController:
         # 加载URDF并解析惯性参数
         self.robot = URDF.from_xml_file(self.urdf_path)
         self.inertia_params = self._load_inertia_params()
+
+        self.velocity_pub = rospy.Publisher(
+            '/arm_controller/command',  # 示例topic
+            Float64MultiArray, 
+            queue_size=1
+        )
         
         # 订阅者
         self.state_sub = rospy.Subscriber(
@@ -356,32 +366,62 @@ class ArmController:
         traj_msg.points.append(point)
         
         return traj_msg
+    
+    def _scale_action(self, action):
+        """将归一化动作映射到物理速度范围"""
+        # 示例：若policy输出层用tanh激活
+        return action * self.max_joint_velocity  # max_joint_velocity=3.14
         
     def execute_action(self, action):
         """执行动作"""
         try:
-            if self.current_joint_positions is None:
-                rospy.logwarn("当前关节位置未知")
-                return False
+            # if self.current_joint_positions is None:
+            #     rospy.logwarn("当前关节位置未知")
+            #     return False
                 
-            # 计算目标位置
-            next_pos = (self.current_joint_positions + action * 0.1).tolist()
+            # # 计算目标位置
+            # next_pos = (self.current_joint_positions + action * 0.1).tolist()
             
-            # 生成轨迹
-            traj_msg = self.generate_trajectory(
-                self.current_joint_positions, 
-                next_pos
-            )
+            # # 生成轨迹
+            # traj_msg = self.generate_trajectory(
+            #     self.current_joint_positions, 
+            #     next_pos
+            # )
             
-            # 发送动作
-            goal = FollowJointTrajectoryGoal()
-            goal.trajectory = traj_msg
-            self.arm_client.send_goal(goal)
+            # # 发送动作
+            # goal = FollowJointTrajectoryGoal()
+            # goal.trajectory = traj_msg
+            # self.arm_client.send_goal(goal)
+
+
             
-            # 等待动作完成
-            if not self.arm_client.wait_for_result(rospy.Duration(5.0)):
-                rospy.logwarn("动作执行超时！")
-                return False
+            # # 等待动作完成
+            # if not self.arm_client.wait_for_result(rospy.Duration(5.0)):
+            #     rospy.logwarn("动作执行超时！")
+            #     return False
+            
+
+            # 动作解析为关节速度 (需缩放至物理合理范围)
+            scaled_vel = self._scale_action(action)  # 示例缩放至[-2π, 2π] rad/s
+            
+            # 创建速度消息
+            vel_msg = Float64MultiArray()
+            
+            # 设置数据布局（可选但推荐）
+            vel_msg.layout.dim = [MultiArrayDimension()]
+            vel_msg.layout.dim[0].label = "velocity"
+            vel_msg.layout.dim[0].size = len(action)
+            vel_msg.layout.dim[0].stride = 1
+            
+            # 填充速度数据
+            scaled_vel = self._scale_action(action)
+            vel_msg.data = scaled_vel.tolist()
+            
+            # 发布消息
+            self.velocity_pub.publish(vel_msg)
+            
+            # 等待物理引擎更新 (关键参数)
+            rospy.sleep(self.dt * 0.8)  # 需略小于控制周期
                 
             return True
             

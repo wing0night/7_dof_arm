@@ -463,22 +463,32 @@ class RobotEnv:
         
     def calculate_reward(self, action):
         """多目标奖励计算"""
+
+        # 获取新状态
+        # 直接从Gazebo获取最新状态
+        if not self.update_state_from_gazebo():
+            rospy.logwarn("无法从Gazebo更新状态")
+            return None, 0, True, {}
+
         # 验证状态是否有效
         if self.current_state is None:
             rospy.logwarn("计算奖励时状态为空")
             return 0.0
         
+        # 获取新状态并验证变化
+        new_state = self.current_state.copy()
+        
         # 位置误差奖励
-        pos_error = np.linalg.norm(self.current_state[-3:] - self.target_pos)
+        pos_error = np.linalg.norm(new_state[-3:] - self.target_pos)
         reward_pos = -1.0 * np.exp(2 * pos_error)
         
         # 平滑度奖励
-        joint_vel = self.current_state[7:14]
+        joint_vel = new_state[7:14]
         joint_acc = np.diff(joint_vel)
         reward_smooth = -0.5 * (np.sum(joint_vel**2) + 0.2 * np.sum(joint_acc**2))
         
         # 能量消耗奖励
-        joint_effort = self.current_state[14:21]
+        joint_effort = new_state[14:21]
         reward_energy = -0.3 * np.sum((joint_effort**2))
         
         # 额外奖励
@@ -566,7 +576,7 @@ class RobotEnv:
             # 确保所有数值都是float类型
             point.positions = [float(pos) for pos in initial_positions]
             point.velocities = [float(0.0)] * 7  # 明确指定float类型
-            point.time_from_start = rospy.Duration(1.0)
+            point.time_from_start = rospy.Duration(3.0)
             
             cmd_msg.points.append(point)
             
