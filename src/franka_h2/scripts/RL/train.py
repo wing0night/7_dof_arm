@@ -33,6 +33,9 @@ from std_srvs.srv import Empty
 
 from tqdm import tqdm
 
+from fk import cal_fk
+from extract_pose import extract_pose
+
 # 获取包路径
 rospack = rospkg.RosPack()
 pkg_path = rospack.get_path('franka_h2')
@@ -65,7 +68,8 @@ class RobotEnv:
         # 状态参数
         self.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 
                            'joint5', 'joint6', 'joint7']
-        self.state_dim = 7 * 3 + 3  # 7关节(位置+速度+力矩) + 末端位置
+        self.state_dim = 7 * 3 + 7  # 7关节(位置+速度+力矩) + 末端位置&三轴角
+        # 后续删掉力矩，换成目标末端位置&三轴角
         self.action_dim = 7
         # 初始化状态存储
         # 状态存储
@@ -74,6 +78,10 @@ class RobotEnv:
         self.current_joint_velocities = None
         self.current_joint_efforts = None
         self.current_ee_pos = None
+        self.axis_angle = None
+        self.position_ee = None
+        self.position_ee_tar = None
+        self.axis_angle_tar = None
         
         # 订阅者
         self.state_sub = rospy.Subscriber(
@@ -102,6 +110,13 @@ class RobotEnv:
             [1, 0, 0],
             [0, 0, 1]
         ])
+        
+        # 创建4x4单位矩阵
+        self.T_tar = np.eye(4)
+        # 填入旋转部分 (左上3x3)
+        self.T_tar[:3, :3] = self.R_custom
+        # 填入平移部分 (前三行第四列)
+        self.T_tar[:3, 3] = [self.x, self.y, self.z]
         
         # 加载URDF并解析惯性参数
         self.robot = URDF.from_xml_file(self.urdf_path)
@@ -184,6 +199,7 @@ class RobotEnv:
             resp = self.get_joint_properties(f"{joint_name}")
             # print(resp)
             if resp.success:
+                print(f"获取关节 {joint_name} 状态成功：", resp)
                 return {
                     'position': resp.position[0],
                     'rate': resp.rate[0],
@@ -296,6 +312,7 @@ class RobotEnv:
                         velocities.append(state['rate'])
                         # efforts.append(state['effort'])
                 
+                
                 positions = np.array(positions)
                 velocities = np.array(velocities)
                 
@@ -306,6 +323,7 @@ class RobotEnv:
                     self.current_joint_velocities,  # 使用上一时刻的速度
                     dt=0.02  # 假设50Hz的更新频率
                 )
+                
 
 
                 self.current_joint_positions = np.array(positions)
@@ -313,15 +331,28 @@ class RobotEnv:
                 self.current_joint_efforts = np.array(efforts)
                 
                 # 计算末端执行器位置
-                T = self.panda.fkine(self.current_joint_positions)
-                self.current_ee_pos = np.array([T.t[0], T.t[1], T.t[2]])
+                # T = self.panda.fkine(self.current_joint_positions)
+                # self.current_ee_pos = np.array([T.t[0], T.t[1], T.t[2]])
+                # 获得当前末端位姿和三轴角表示
+                T_ee = cal_fk(self.current_joint_positions)
+                position_ee, axis_angle = extract_pose(T_ee)
+                self.position_ee = np.array(position_ee)
+                self.axis_angle = np.array(axis_angle)
+                
+                position_ee_tar, axis_angle_tar = extract_pose(self.T_tar)
+                self.position_ee_tar = np.array(position_ee)
+                self.axis_angle_tar = np.array(axis_angle)
                 
                 # 更新完整状态向量
                 self.current_state = np.concatenate([
                     self.current_joint_positions,
                     self.current_joint_velocities,
-                    self.current_joint_efforts,
-                    self.current_ee_pos
+                    # self.current_joint_efforts,
+                    # self.current_ee_pos
+                    self.position_ee,
+                    self.axis_angle,
+                    self.position_ee_tar,
+                    self.axis_angle_tar
                 ])
                 
                 self.state_updated = True
@@ -426,14 +457,6 @@ class RobotEnv:
         if self.current_state is None:
             rospy.logwarn("计算奖励时状态为空")
             return 0.0
-            
-        # 打印当前状态各部分
-        # print("\nCurrent State Components:")
-        # print(f"Joint Positions: {self.current_state[:7]}")
-        # print(f"Joint Velocities: {self.current_state[7:14]}")
-        # print(f"Joint Efforts: {self.current_state[14:21]}")
-        # print(f"End Effector Position: {self.current_state[-3:]}")
-        # print(f"Target Position: {self.target_pos}")
         
         # 位置误差奖励
         pos_error = np.linalg.norm(self.current_state[-3:] - self.target_pos)
@@ -450,14 +473,6 @@ class RobotEnv:
         
         # 额外奖励
         reward_extra = 10.0 if pos_error < 0.005 else 10 / (1 + 10 * pos_error)
-        
-        # 打印详细的奖励计算过程
-        # print("\nReward Calculation Details:")
-        # print(f"Position Error: {pos_error}")
-        # print(f"Position Reward: {reward_pos}")
-        # print(f"Smoothness Reward: {reward_smooth}")
-        # print(f"Energy Reward: {reward_energy}")
-        # print(f"Extra Reward: {reward_extra}")
         
         total_reward = reward_pos + reward_smooth + reward_energy + reward_extra
         # print(f"Total Reward: {total_reward}\n")
@@ -689,7 +704,7 @@ def train():
     #     return
     
     # 训练参数
-    max_episodes = 50
+    max_episodes = 30
     episode_rewards = []
 
     progress_bar = tqdm(range(max_episodes), desc="Training", unit="episode")
@@ -755,6 +770,7 @@ def train():
             "ep_reward": episode_reward,
             "steps": steps
         })
+    progress_bar.close()
     
     # 保存模型
     try:
