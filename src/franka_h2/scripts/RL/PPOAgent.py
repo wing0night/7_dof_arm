@@ -20,7 +20,7 @@ class PPOAgent:
         
         # 衰减episode参数
         self.episode_length = 100  # 初始episode长度
-        self.decay_rate = 0.995    # 衰减率
+        self.decay_rate = 0.95    # 衰减率
         self.min_ep_length = 10   # 最小长度
 
     def update_policy(self, states, actions, rewards, next_states, dones):

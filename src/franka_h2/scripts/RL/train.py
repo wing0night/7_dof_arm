@@ -357,8 +357,6 @@ class RobotEnv:
                 self.current_state = np.concatenate([
                     self.current_joint_positions,
                     self.current_joint_velocities,
-                    # self.current_joint_efforts,
-                    # self.current_ee_pos
                     self.position_ee,
                     self.axis_angle,
                     self.position_ee_tar,

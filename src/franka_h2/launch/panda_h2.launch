@@ -45,12 +45,12 @@
 
     <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
 
-    <node 
+    <!-- <node 
         pkg="franka_h2" 
         type="LM_ik_solver.py" 
         name="ik_solver" 
         output="screen"
-    />
+    /> -->
 
     <!-- <node 
         pkg="franka_h2" 
@@ -69,6 +69,12 @@
         name="CSI_solver" 
         output="screen"
     /> -->
+    <node 
+        pkg="franka_h2" 
+        type="Bi-RRT.py" 
+        name="CSI_solver" 
+        output="screen"
+    />
 
     <!-- <node 
         pkg="franka_h2" 
