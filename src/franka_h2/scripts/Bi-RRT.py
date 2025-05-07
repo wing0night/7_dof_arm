@@ -11,9 +11,13 @@ from franka_h2.msg import TrajectoryData
 import random
 from scipy.spatial import KDTree
 
+from fk import cal_fk
 import time
-from franka_h2.scripts.fk import cal_fk
-from franka_h2.scripts.ik_geo import franka_IK_EE    
+from ik_geo import franka_IK_EE 
+
+from urdf_parser_py.urdf import URDF
+import rospkg
+import os
 
 class BiRRTPlanner:
     def __init__(self):
@@ -51,6 +55,52 @@ class BiRRTPlanner:
         self.current_joint_positions = None
         rospy.Subscriber('/joint_states', JointState, self.joint_state_callback)
         rospy.wait_for_message('/joint_states', JointState)
+
+        # 自定义轨迹的发布器
+        self.traj_pub = rospy.Publisher('/trajectory_data', TrajectoryData, queue_size=10)
+
+        # 获取包路径
+        rospack = rospkg.RosPack()
+        pkg_path = rospack.get_path('franka_h2')
+
+        # 构建URDF文件路径
+        self.urdf_path = os.path.join(pkg_path, 'urdf', 'panda_robot_gazebo.urdf')
+
+        # 加载URDF并解析惯性参数
+        self.robot = URDF.from_xml_file(self.urdf_path)
+
+        self.inertia_params = self._load_inertia_params()
+    
+    def _load_inertia_params(self):
+        """从URDF中提取完整的惯性参数（质量、转动惯量矩阵、质心位置）"""
+        inertia_params = {}
+        for name in self.joint_names:
+            for joint in self.robot.joints:
+                if joint.name == name:
+                    child_link = self.robot.link_map[joint.child]
+                    if child_link.inertial:
+                        # 提取质量
+                        mass = child_link.inertial.mass
+                        
+                        # 提取完整转动惯量矩阵
+                        inertia = child_link.inertial.inertia
+                        inertia_matrix = [
+                            [inertia.ixx, inertia.ixy, inertia.ixz],
+                            [inertia.ixy, inertia.iyy, inertia.iyz],
+                            [inertia.ixz, inertia.iyz, inertia.izz]
+                        ]
+                        
+                        # 提取质心位置（相对于关节坐标系）
+                        origin = child_link.inertial.origin
+                        com_position = origin.xyz if origin else [0,0,0]
+                        
+                        inertia_params[name] = {
+                            'mass': mass,
+                            'inertia_matrix': inertia_matrix,
+                            'com_position': com_position
+                        }
+                    break
+        return inertia_params
         
     def joint_state_callback(self, msg):
         self.current_joint_positions = msg.position[:7]
@@ -215,6 +265,36 @@ class BiRRTPlanner:
         
         return positions, velocities, accelerations
     
+    def calculate_gravity_torques(self):
+        """计算各关节重力矩（返回字典形式）"""
+        g = 9.81  # 重力加速度
+        gravity_torques = {}  # 使用字典存储结果
+        
+        for joint_name in self.joint_names:
+            # 获取关节参数
+            params = self.inertia_params.get(joint_name)
+            if not params:
+                rospy.logwarn(f"未找到关节 {joint_name} 的惯性参数")
+                continue
+                
+            # 解包参数
+            mass = params['mass']
+            com = np.array(params['com_position'])
+            
+            # 基坐标系重力矢量（可根据实际坐标系方向调整）
+            base_gravity = np.array([0, 0, -g])  
+            
+            # 简化的坐标系转换（假设关节坐标系与基坐标系对齐）
+            joint_gravity = base_gravity  # 实际需用变换矩阵转换
+            
+            # 计算力矩 τ = r × F
+            torque_vector = np.cross(com, mass * joint_gravity)
+            
+            # 存储Z轴分量（假设关节绕Z轴旋转）
+            gravity_torques[joint_name] = torque_vector[2]  # 单位：Nm
+            
+        return gravity_torques
+    
     def move_to_goal(self, goal_positions, duration=10.0):
         """主要执行函数"""
         if self.current_joint_positions is None:
@@ -251,12 +331,14 @@ class BiRRTPlanner:
         # 构建轨迹消息
         traj_msg = JointTrajectory()
         traj_msg.joint_names = self.joint_names
+
+        timestamps = np.linspace(0, duration, len(total_points))
         
         for i in range(len(total_points)):
             point = JointTrajectoryPoint()
-            point.positions = total_points[i]
-            point.velocities = total_velocities[i]
-            point.time_from_start = rospy.Duration(i * duration / len(total_points))
+            point.positions = [total_points[j][i] for j in range(len(self.joint_names))]
+            point.velocities = [total_velocities[j][i] for j in range(len(self.joint_names))]
+            point.time_from_start = rospy.Duration(timestamps[i])
             traj_msg.points.append(point)
         
         # 发送轨迹
@@ -268,6 +350,60 @@ class BiRRTPlanner:
         self.arm_client.wait_for_result(rospy.Duration(duration + 5.0))
         
         rospy.loginfo("运动规划执行完成！")
+
+        gravity_torques = self.calculate_gravity_torques()
+
+        g = 9.81
+
+        for i in range(len(total_points)):
+            target_msg = TrajectoryData()
+            target_msg.joint_names = self.joint_names
+            target_msg.positions = [total_points[j][i] for j in range(len(self.joint_names))]
+            current_velocities = [total_velocities[j][i] for j in range(len(self.joint_names))]
+            target_msg.velocities = current_velocities
+
+            # 计算角加速度
+            current_time = timestamps[i]
+            if self.prev_velocities and i > 0:
+                dt = current_time - self.prev_time
+                accelerations = [(v - pv)/dt for v, pv in zip(current_velocities, self.prev_velocities)]
+            else:
+                accelerations = [0.0]*len(self.joint_names)
+            
+            target_msg.acc = accelerations  # 直接赋值计算结果
+
+            # 力矩计算部分
+            for name in self.joint_names:  # 按joint_names顺序遍历
+                # 获取当前关节参数
+                params = self.inertia_params[name]
+                
+                # 获取对应的加速度（按索引匹配顺序）
+                j = self.joint_names.index(name)
+                acc = accelerations[j]
+                
+                # 获取当前关节重力矩
+                grav = gravity_torques[name]
+                
+                # 计算惯性力矩 + 重力补偿
+                inertia_torque = np.dot(params['inertia_matrix'], [0, 0, acc])[2]  # 取绕Z轴分量
+                total_torque = inertia_torque + grav
+                
+                target_msg.torques.append(total_torque)
+
+            # 计算力矩（τ = Iα 的简化模型）
+            # target_msg.torques = [self.inertia_params[name] * acc for name, acc 
+            #                     in zip(self.joint_names, accelerations)]
+            
+            
+
+            # 更新时间记录
+            self.prev_velocities = current_velocities
+            self.prev_time = current_time
+            
+            # 发布时间戳和消息
+            target_msg.stamp = rospy.Time.now() + rospy.Duration(current_time)
+            self.traj_pub.publish(target_msg)
+            rospy.sleep(1.0 / 50)
 
 if __name__ == '__main__':
     try:
@@ -289,7 +425,7 @@ if __name__ == '__main__':
 
         sol = list(solutions[0])
 
-        planner.move_to_goal(goal_positions, duration=10.0)
+        planner.move_to_goal(solutions[0], duration=10.0)
         
     except rospy.ROSInterruptException:
         pass
