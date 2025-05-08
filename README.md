@@ -20,7 +20,7 @@ franka_h2/rl：强化学习训练、部署代码
 
 
 
-- RRT中还存在bug，中move_to_goal函数中，在发送运动消息后如何等到机械臂运动到目标位置后再进行当前位置更新（`_update_current_position`函数），而不是直接在函数最后加一个`self.current_joint_positions = goal_positions`（不太规范）
+- (solved，在Bi-RRT中)RRT中还存在bug，中move_to_goal函数中，在发送运动消息后如何等到机械臂运动到目标位置后再进行当前位置更新（`_update_current_position`函数），而不是直接在函数最后加一个`self.current_joint_positions = goal_positions`（不太规范）
 
 
 ## scripts
