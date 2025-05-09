@@ -58,8 +58,13 @@ class CSI_solver():
         rospy.Subscriber('/joint_states', JointState, self.joint_state_callback)
         rospy.wait_for_message('/joint_states', JointState)
 
+        self.test = 1
+
     def joint_state_callback(self, msg):
         self.current_joint_positions = msg.position
+        if self.test == 1:
+            print("Current joint positions:", self.current_joint_positions)
+            test += 1
     
     def _load_inertia_params(self):
         """从URDF中提取完整的惯性参数（质量、转动惯量矩阵、质心位置）"""

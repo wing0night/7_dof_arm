@@ -561,39 +561,86 @@ class RobotEnv:
     def reset(self):
         """重置环境到初始状态"""
         try:
-            # 创建初始轨迹消息
+            # 1. 首先停止当前所有运动
+            self.arm_client.cancel_all_goals()
+            rospy.sleep(0.5)  # 等待停止完成
+            
+            # 2. 创建初始轨迹消息
             cmd_msg = JointTrajectory()
             cmd_msg.joint_names = self.joint_names
             
-            # 设置初始关节角度（确保使用float类型）
-            # initial_positions = [float(x) for x in [0.0, 0.0, 0.0, -1.736, 0.0, 0, 0]]
+            # 3. 设置初始关节角度（使用更安全的初始位置）
             initial_positions = [float(x) for x in [0.0, 0.0, 0.0, 0, 0.0, 0, 0]]
-            
-            # 创建轨迹点
-            point = JointTrajectoryPoint()
-            # 确保所有数值都是float类型
-            point.positions = [float(pos) for pos in initial_positions]
-            point.velocities = [float(0.0)] * 7  # 明确指定float类型
-            point.time_from_start = rospy.Duration(3.0)
-            
-            cmd_msg.points.append(point)
-            
-            # 使用actionlib发送和等待
-            goal = FollowJointTrajectoryGoal(trajectory=cmd_msg)
-            self.arm_client.send_goal(goal)
-            
-            # 等待机械臂到达初始位置
-            self.arm_client.wait_for_result(rospy.Duration(2.0))
-            
-            # 等待一小段时间确保状态更新
-            rospy.sleep(0.1)
 
             self.update_state_from_gazebo()
+
+            num_points = 250  # 轨迹点数
+            duration = 5   # 总时间
+            timestamps = np.linspace(0, duration, num_points)
             
-            # 确保我们有有效的状态
-            while self.current_state is None and not rospy.is_shutdown():
-                rospy.loginfo("等待初始状态更新...")
+            # 存储插值数据
+            # 4. 创建轨迹点，使用五次多项式插值
+            all_positions = []
+            all_velocities = []
+            for joint_idx in range(len(initial_positions)):
+                start = self.current_joint_positions[joint_idx]
+                goal = initial_positions[joint_idx]
+                positions, velocities, _ = self.quintic_interpolation(start, goal, duration, 50)
+                all_positions.append(positions)
+                all_velocities.append(velocities)
+            
+            std_traj_msg = JointTrajectory()
+            std_traj_msg.joint_names = self.joint_names
+            for i in range(num_points):
+                point = JointTrajectoryPoint()
+                point.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
+                point.velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
+                point.time_from_start = rospy.Duration(timestamps[i])
+                std_traj_msg.points.append(point)
+
+            # 方式一：通过Action发送给控制器
+            goal = FollowJointTrajectoryGoal()
+            goal.trajectory = std_traj_msg
+            self.arm_client.send_goal(goal)
+            
+            # 6. 等待执行完成，并检查结果
+            success = self.arm_client.wait_for_result(rospy.Duration(duration + 2.0))
+            if not success:
+                rospy.logwarn("重置轨迹执行超时")
+                return None
+                
+            result = self.arm_client.get_result()
+            if result.error_code != 0:
+                rospy.logerr(f"重置轨迹执行失败: {result.error_string}")
+                return None
+            
+            # 7. 等待状态更新并验证
+            max_wait_time = 5.0
+            start_time = rospy.Time.now()
+            
+            while not rospy.is_shutdown():
+                if (rospy.Time.now() - start_time).to_sec() > max_wait_time:
+                    rospy.logerr("等待状态更新超时")
+                    return None
+                    
+                if self.update_state_from_gazebo():
+                    # 验证是否到达目标位置
+                    position_error = np.linalg.norm(
+                        np.array(self.current_joint_positions) - np.array(initial_positions)
+                    )
+                    if position_error < 0.01:  # 位置误差阈值
+                        break
                 rospy.sleep(0.1)
+            
+            # 8. 确保所有状态都被正确更新
+            if self.current_state is None:
+                rospy.logerr("无法获取有效状态")
+                return None
+                
+            # 9. 重置其他状态变量
+            self.prev_velocities = None
+            self.prev_time = None
+            self.state_updated = False
             
             return self.current_state.copy()
             
@@ -712,6 +759,7 @@ def train():
         if state is None:
             rospy.logerr("无法获取初始状态，跳过此回合")
             continue
+        print(f"Episode {ep} - 初始状态: {state}")
             
         episode_reward = 0
         memory = []
