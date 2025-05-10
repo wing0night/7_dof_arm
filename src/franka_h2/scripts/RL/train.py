@@ -142,6 +142,15 @@ class RobotEnv:
             [-0.0175, 3.7525],  # joint6
             [-2.8973, 2.8973]   # joint7
         ]
+        # self.joint_limits = [
+        #     [-25, 25],  # joint1
+        #     [-15, 15],  # joint2
+        #     [-25, 25],  # joint3
+        #     [-25, 25], # joint4
+        #     [-25, 25],  # joint5
+        #     [-25, 25],  # joint6
+        #     [-25, 25]   # joint7
+        # ]
 
         # 添加Gazebo服务客户端
         rospy.loginfo("等待Gazebo服务...")
@@ -175,6 +184,9 @@ class RobotEnv:
         # 存储Gazebo状态
         self.gazebo_model_state = None
         self.gazebo_link_states = None
+
+        self.prev_velocities = None
+        self.prev_time = None
     
     def gazebo_model_callback(self, msg):
         """处理Gazebo模型状态更新"""
@@ -519,134 +531,218 @@ class RobotEnv:
         return action * self.max_joint_velocity  # max_joint_velocity=3.14
     
     def step(self, action):
-        # 动作解析为关节速度 (需缩放至物理合理范围)
-        scaled_vel = self._scale_action(action)  # 示例缩放至[-2π, 2π] rad/s
-        
-        # 创建速度消息
-        vel_msg = Float64MultiArray()
-        
-        # 设置数据布局（可选但推荐）
-        vel_msg.layout.dim = [MultiArrayDimension()]
-        vel_msg.layout.dim[0].label = "velocity"
-        vel_msg.layout.dim[0].size = len(action)
-        vel_msg.layout.dim[0].stride = 1
-        
-        # 填充速度数据
-        scaled_vel = self._scale_action(action)
-        vel_msg.data = scaled_vel.tolist()
-        
-        # 发布消息
-        self.velocity_pub.publish(vel_msg)
-        
-        # 等待物理引擎更新 (关键参数)
-        rospy.sleep(self.dt * 0.8)  # 需略小于控制周期
-        
-        # 获取新状态
-        # 直接从Gazebo获取最新状态
-        if not self.update_state_from_gazebo():
-            rospy.logwarn("无法从Gazebo更新状态")
-            return None, 0, True, {}
-        
-        # 获取新状态并验证变化
-        new_state = self.current_state.copy()
-        
-        # 计算奖励
-        reward = self.calculate_reward(action)
-        
-        # 终止判断
-        done = True
-        
-        return new_state, reward, done, {}
-    
-    def reset(self):
-        """重置环境到初始状态"""
+        """执行动作并获取下一个状态"""
         try:
-            # 1. 首先停止当前所有运动
-            self.arm_client.cancel_all_goals()
-            rospy.sleep(0.5)  # 等待停止完成
+            # 1. 获取当前状态
+            if not self.update_state_from_gazebo():
+                rospy.logwarn("无法从Gazebo更新状态")
+                return None, 0, True, {}
+                
+            current_positions = self.current_joint_positions.copy()
             
-            # 2. 创建初始轨迹消息
-            cmd_msg = JointTrajectory()
-            cmd_msg.joint_names = self.joint_names
+            # 2. 将速度动作转换为位置目标
+            # 使用当前速度和时间步长计算目标位置
+            scaled_vel = self._scale_action(action)  # 缩放速度到合理范围
+            target_positions = current_positions + scaled_vel * self.dt
             
-            # 3. 设置初始关节角度（使用更安全的初始位置）
-            initial_positions = [float(x) for x in [0.0, 0.0, 0.0, 0, 0.0, 0, 0]]
-
-            self.update_state_from_gazebo()
-
-            num_points = 250  # 轨迹点数
-            duration = 5   # 总时间
+            # 3. 检查关节限位
+            for i, (pos, limit) in enumerate(zip(target_positions, self.joint_limits)):
+                target_positions[i] = max(min(pos, limit[1]), limit[0])
+            
+            # 4. 生成轨迹
+            duration = self.dt  # 使用与step相同的时间
+            num_points = int(duration * 50)  # 50Hz的采样频率
             timestamps = np.linspace(0, duration, num_points)
             
             # 存储插值数据
-            # 4. 创建轨迹点，使用五次多项式插值
             all_positions = []
             all_velocities = []
-            for joint_idx in range(len(initial_positions)):
-                start = self.current_joint_positions[joint_idx]
-                goal = initial_positions[joint_idx]
-                positions, velocities, _ = self.quintic_interpolation(start, goal, duration, 50)
+            for joint_idx in range(len(target_positions)):
+                start = current_positions[joint_idx]
+                goal = target_positions[joint_idx]
+                positions, velocities, _ = self.quintic_interpolation(
+                    start, 
+                    goal, 
+                    duration, 
+                    freq=50
+                )
                 all_positions.append(positions)
                 all_velocities.append(velocities)
             
-            std_traj_msg = JointTrajectory()
-            std_traj_msg.joint_names = self.joint_names
+            # 5. 构建轨迹消息
+            traj_msg = JointTrajectory()
+            traj_msg.joint_names = self.joint_names
+            
             for i in range(num_points):
                 point = JointTrajectoryPoint()
                 point.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
                 point.velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
                 point.time_from_start = rospy.Duration(timestamps[i])
-                std_traj_msg.points.append(point)
-
-            # 方式一：通过Action发送给控制器
+                traj_msg.points.append(point)
+            
+            # 6. 发送轨迹
             goal = FollowJointTrajectoryGoal()
-            goal.trajectory = std_traj_msg
+            goal.trajectory = traj_msg
             self.arm_client.send_goal(goal)
             
-            # 6. 等待执行完成，并检查结果
-            success = self.arm_client.wait_for_result(rospy.Duration(duration + 2.0))
+            # 7. 等待执行完成
+            success = self.arm_client.wait_for_result(rospy.Duration(duration + 0.5))
             if not success:
-                rospy.logwarn("重置轨迹执行超时")
-                return None
+                rospy.logwarn("轨迹执行超时")
+                return None, 0, True, {}
+            
+            # 8. 发布轨迹数据用于可视化
+            for i in range(num_points):
+                target_msg = TrajectoryData()
+                target_msg.joint_names = self.joint_names
+                target_msg.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
+                current_velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
+                target_msg.velocities = current_velocities
                 
-            result = self.arm_client.get_result()
-            if result.error_code != 0:
-                rospy.logerr(f"重置轨迹执行失败: {result.error_string}")
-                return None
-            
-            # 7. 等待状态更新并验证
-            max_wait_time = 5.0
-            start_time = rospy.Time.now()
-            
-            while not rospy.is_shutdown():
-                if (rospy.Time.now() - start_time).to_sec() > max_wait_time:
-                    rospy.logerr("等待状态更新超时")
-                    return None
-                    
-                if self.update_state_from_gazebo():
-                    # 验证是否到达目标位置
-                    position_error = np.linalg.norm(
-                        np.array(self.current_joint_positions) - np.array(initial_positions)
-                    )
-                    if position_error < 0.01:  # 位置误差阈值
-                        break
-                rospy.sleep(0.1)
-            
-            # 8. 确保所有状态都被正确更新
-            if self.current_state is None:
-                rospy.logerr("无法获取有效状态")
-                return None
+                # 计算角加速度
+                current_time = timestamps[i]
+                if self.prev_velocities and i > 0:
+                    dt = current_time - self.prev_time
+                    accelerations = [(v - pv)/dt for v, pv in zip(current_velocities, self.prev_velocities)]
+                else:
+                    accelerations = [0.0]*len(self.joint_names)
                 
-            # 9. 重置其他状态变量
-            self.prev_velocities = None
-            self.prev_time = None
-            self.state_updated = False
+                target_msg.acc = accelerations
+                
+                # 更新力矩
+                target_msg.torques = self.current_joint_efforts.tolist()
+                
+                # 更新时间记录
+                self.prev_velocities = current_velocities
+                self.prev_time = current_time
+                
+                # 发布时间戳和消息
+                target_msg.stamp = rospy.Time.now() + rospy.Duration(current_time)
+                self.traj_pub.publish(target_msg)
+                rospy.sleep(1.0 / 50)
             
-            return self.current_state.copy()
+            # 9. 获取新状态
+            if not self.update_state_from_gazebo():
+                rospy.logwarn("无法从Gazebo更新状态")
+                return None, 0, True, {}
+            
+            new_state = self.current_state.copy()
+            
+            # 10. 计算奖励
+            reward = self.calculate_reward(action)
+            
+            # 11. 终止判断
+            done = True
+            
+            return new_state, reward, done, {}
             
         except Exception as e:
-            rospy.logerr(f"重置环境时出错: {str(e)}")
-            return None
+            rospy.logerr(f"执行步骤时出错: {str(e)}")
+            return None, 0, True, {}
+    
+    def reset(self):
+        self.update_state_from_gazebo()
+        """重置环境到初始状态"""
+        if self.current_joint_positions is None:
+            rospy.logerr("未获取到当前关节状态！")
+            return
+        # goal_positions = [2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0]
+        goal_positions = np.array([0, 0, 0, -2, 0, 0, 0])  # 目标关节位置
+        duration = 5.0  # 重置时间
+
+        num_points = int(duration * 50)
+        timestamps = np.linspace(0, duration, num_points)
+
+        # gravity_torques = self.calculate_gravity_torques()
+
+        g = 9.81
+
+        # 存储插值数据
+        all_positions = []
+        all_velocities = []
+        for joint_idx in range(len(goal_positions)):
+            start = self.current_joint_positions[joint_idx]
+            goal = goal_positions[joint_idx]
+            positions, velocities, _ = self.quintic_interpolation(start, goal, duration, 50)
+            all_positions.append(positions)
+            all_velocities.append(velocities)
+            # trajectory = self.generate_trajectory(start, goal, duration)
+
+        # ================== 新增：构建标准JointTrajectory ==================
+        std_traj_msg = JointTrajectory()
+        std_traj_msg.joint_names = self.joint_names
+        for i in range(num_points):
+            point = JointTrajectoryPoint()
+            point.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
+            point.velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
+            point.time_from_start = rospy.Duration(timestamps[i])
+            std_traj_msg.points.append(point)
+
+        # 方式一：通过Action发送给控制器
+        goal = FollowJointTrajectoryGoal()
+        goal.trajectory = std_traj_msg
+        self.arm_client.send_goal(goal)
+
+        # 方式二：直接发布到话题（如果控制器订阅话题）
+        # self.std_traj_pub.publish(std_traj_msg)
+
+        # ================== 原有的自定义轨迹发布 ==================
+        for i in range(num_points):
+            target_msg = TrajectoryData()
+            target_msg.joint_names = self.joint_names
+            target_msg.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
+            current_velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
+            target_msg.velocities = current_velocities
+
+            # 计算角加速度
+            current_time = timestamps[i]
+            if self.prev_velocities and i > 0:
+                dt = current_time - self.prev_time
+                accelerations = [(v - pv)/dt for v, pv in zip(current_velocities, self.prev_velocities)]
+            else:
+                accelerations = [0.0]*len(self.joint_names)
+            
+            target_msg.acc = accelerations  # 直接赋值计算结果
+
+            index = 0
+
+            # 力矩计算部分
+            for name in self.joint_names:  # 按joint_names顺序遍历
+                # 获取当前关节参数
+                params = self.inertia_params[name]
+                
+                # 获取对应的加速度（按索引匹配顺序）
+                j = self.joint_names.index(name)
+                acc = accelerations[j]
+                
+                # 获取当前关节重力矩
+                # grav = gravity_torques[name]
+                
+                # # 计算惯性力矩 + 重力补偿
+                # inertia_torque = np.dot(params['inertia_matrix'], [0, 0, acc])[2]  # 取绕Z轴分量
+                # total_torque = inertia_torque + grav
+                
+                target_msg.torques.append(self.current_joint_efforts[index])
+                index += 1
+
+            # 计算力矩（τ = Iα 的简化模型）
+            # target_msg.torques = [self.inertia_params[name] * acc for name, acc 
+            #                     in zip(self.joint_names, accelerations)]
+            
+            
+
+            # 更新时间记录
+            self.prev_velocities = current_velocities
+            self.prev_time = current_time
+            
+            # 发布时间戳和消息
+            target_msg.stamp = rospy.Time.now() + rospy.Duration(current_time)
+            self.traj_pub.publish(target_msg)
+            rospy.sleep(1.0 / 50)
+
+        rospy.loginfo("运动完成！")
+        self.update_state_from_gazebo()
+        return self.current_state
     
     def _verify_robot_state(self):
         """验证机器人状态"""
@@ -827,10 +923,15 @@ def train():
     except Exception as e:
         rospy.logerr(f"保存模型失败: {str(e)}")
 
+def test():
+    env = RobotEnv()
+    env.reset()
+
 
 
 if __name__ == "__main__":
     try:
         train()
+        # test()
     except rospy.ROSInterruptException:
         pass

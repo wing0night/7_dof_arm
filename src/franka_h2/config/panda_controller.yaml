@@ -1,5 +1,5 @@
 panda_controller:
-  type: "velocity_controllers/JointTrajectoryController"
+  type: "position_controllers/JointTrajectoryController"
   joints:
     - joint1
     - joint2
@@ -20,15 +20,6 @@ panda_controller:
       joint5: { p: 250, d: 10, i: 0 }
       joint6: { p: 150, d: 10, i: 0 }
       joint7: { p: 50, d: 5, i: 0 }
-
-  # gains:
-  #   joint1: { p: 600, d: 30, i: 0 }
-  #   joint2: { p: 600, d: 30, i: 0 }
-  #   joint3: { p: 600, d: 30, i: 0 }
-  #   joint4: { p: 600, d: 30, i: 0 }
-  #   joint5: { p: 250, d: 10, i: 0 }
-  #   joint6: { p: 150, d: 10, i: 0 }
-  #   joint7: { p: 50, d: 5, i: 0 }
 
   constraints:
     #goal_time: 0.6
