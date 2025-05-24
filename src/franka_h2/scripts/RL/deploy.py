@@ -16,6 +16,8 @@ from gazebo_msgs.srv import GetModelState, GetLinkState, GetJointProperties
 
 from std_msgs.msg import Float64MultiArray, MultiArrayDimension
 
+from franka_h2.msg import TrajectoryData
+
 from threading import Lock
 from urdf_parser_py.urdf import URDF
 from fk import cal_fk
@@ -42,6 +44,20 @@ class ArmController:
         self.policy.eval()  # 设置为评估模式
 
         self.dt = 3.0
+
+        # 关节限位示例（需根据实际URDF修改）
+        self.joint_limits = [
+            [-2.8973, 2.8973],  # joint1
+            [-1.7628, 1.7628],  # joint2
+            [-2.8973, 2.8973],  # joint3
+            [-3.0718, -0.0698], # joint4
+            [-2.8973, 2.8973],  # joint5
+            [-0.0175, 3.7525],  # joint6
+            [-2.8973, 2.8973]   # joint7
+        ]
+
+        # 这里可以是自定义消息的发布器用来绘图
+        self.traj_pub = rospy.Publisher('/trajectory_data', TrajectoryData, queue_size=10)
         
         # ROS配置
         self.joint_names = ['joint1', 'joint2', 'joint3', 'joint4', 
@@ -77,13 +93,16 @@ class ArmController:
             [0, 0, 1]
         ])
 
+        self.max_joint_velocity = 3.14
+
         # # 创建4x4单位矩阵
         # self.T_tar = np.eye(4)
         # # 填入旋转部分 (左上3x3)
         # self.T_tar[:3, :3] = self.R_custom
         # # 填入平移部分 (前三行第四列)
         # self.T_tar[:3, 3] = [self.x, self.y, self.z]
-        self.T_tar = cal_fk([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
+        # self.T_tar = cal_fk([2.22601256 , 1.2024973 , -2.72513796 ,-2.21730977, -2.19911507 , 0.1795953,  0])
+        self.T_tar = cal_fk(np.array([1, 0, 0, -2, 0, 0, 0]))
 
         # 构建URDF文件路径
         self.urdf_path = os.path.join(pkg_path, 'urdf', 'panda_robot_gazebo.urdf')
@@ -102,6 +121,9 @@ class ArmController:
             '/joint_states', 
             JointState, 
         )
+
+        self.prev_velocities = None
+        self.prev_time = None
 
         rospy.loginfo("等待Gazebo服务...")
         try:
@@ -329,8 +351,8 @@ class ArmController:
                 self.axis_angle = np.array(axis_angle)
                 
                 position_ee_tar, axis_angle_tar = extract_pose(self.T_tar)
-                self.position_ee_tar = np.array(position_ee)
-                self.axis_angle_tar = np.array(axis_angle)
+                self.position_ee_tar = np.array(position_ee_tar)
+                self.axis_angle_tar = np.array(axis_angle_tar)
                 
                 # 更新完整状态向量
                 self.current_state = np.concatenate([
@@ -367,74 +389,138 @@ class ArmController:
         
         return traj_msg
     
+    def quintic_interpolation(self, start, goal, duration, freq=50):
+        """五次多项式插值"""
+        num_points = int(duration * freq)
+        t = np.linspace(0, duration, num_points)
+        positions = []
+        velocities = []
+        
+        for ti in t:
+            # 五次多项式系数计算（此处简化）
+            pos = start + (goal - start) * (10*(ti/duration)**3 - 15*(ti/duration)**4 + 6*(ti/duration)**5)
+            vel = (goal - start) * (30*(ti/duration)**2 - 60*(ti/duration)**3 + 30*(ti/duration)**4) / duration
+            positions.append(pos)
+            velocities.append(vel)
+        
+        return positions, velocities, t
+    
     def _scale_action(self, action):
         """将归一化动作映射到物理速度范围"""
         # 示例：若policy输出层用tanh激活
         return action * self.max_joint_velocity  # max_joint_velocity=3.14
         
-    def execute_action(self, action):
-        """执行动作"""
+    def execute_action(self, action, step):
+        """执行动作并获取下一个状态"""
         try:
-            # if self.current_joint_positions is None:
-            #     rospy.logwarn("当前关节位置未知")
-            #     return False
+            # 1. 获取当前状态
+            if not self.update_state_from_gazebo():
+                rospy.logwarn("无法从Gazebo更新状态")
+                return None, 0, True, {}
                 
-            # # 计算目标位置
-            # next_pos = (self.current_joint_positions + action * 0.1).tolist()
+            current_positions = self.current_joint_positions.copy()
             
-            # # 生成轨迹
-            # traj_msg = self.generate_trajectory(
-            #     self.current_joint_positions, 
-            #     next_pos
-            # )
+            # 2. 将速度动作转换为位置目标
+            # 使用当前速度和时间步长计算目标位置
+            scaled_vel = self._scale_action(action)  # 缩放速度到合理范围
+            target_positions = current_positions + scaled_vel * self.dt
             
-            # # 发送动作
-            # goal = FollowJointTrajectoryGoal()
-            # goal.trajectory = traj_msg
-            # self.arm_client.send_goal(goal)
+            # 3. 检查关节限位
+            for i, (pos, limit) in enumerate(zip(target_positions, self.joint_limits)):
+                target_positions[i] = max(min(pos, limit[1]), limit[0])
+            
+            # 4. 生成轨迹
+            duration = self.dt  # 使用与step相同的时间
+            num_points = int(duration * 50)  # 50Hz的采样频率
+            timestamps = np.linspace(0, duration, num_points)
 
-
+            timestamps = [t + step * self.dt for t in timestamps]
             
-            # # 等待动作完成
-            # if not self.arm_client.wait_for_result(rospy.Duration(5.0)):
-            #     rospy.logwarn("动作执行超时！")
-            #     return False
+            # 存储插值数据
+            all_positions = []
+            all_velocities = []
+            for joint_idx in range(len(target_positions)):
+                start = current_positions[joint_idx]
+                goal = target_positions[joint_idx]
+                positions, velocities, _ = self.quintic_interpolation(
+                    start, 
+                    goal, 
+                    duration, 
+                    freq=50
+                )
+                all_positions.append(positions)
+                all_velocities.append(velocities)
             
-
-            # 动作解析为关节速度 (需缩放至物理合理范围)
-            scaled_vel = self._scale_action(action)  # 示例缩放至[-2π, 2π] rad/s
+            # 5. 构建轨迹消息
+            traj_msg = JointTrajectory()
+            traj_msg.joint_names = self.joint_names
             
-            # 创建速度消息
-            vel_msg = Float64MultiArray()
+            for i in range(num_points):
+                point = JointTrajectoryPoint()
+                point.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
+                point.velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
+                point.time_from_start = rospy.Duration(timestamps[i])
+                traj_msg.points.append(point)
             
-            # 设置数据布局（可选但推荐）
-            vel_msg.layout.dim = [MultiArrayDimension()]
-            vel_msg.layout.dim[0].label = "velocity"
-            vel_msg.layout.dim[0].size = len(action)
-            vel_msg.layout.dim[0].stride = 1
+            # 6. 发送轨迹
+            goal = FollowJointTrajectoryGoal()
+            goal.trajectory = traj_msg
+            self.arm_client.send_goal(goal)
             
-            # 填充速度数据
-            scaled_vel = self._scale_action(action)
-            vel_msg.data = scaled_vel.tolist()
+            # 7. 等待执行完成
+            success = self.arm_client.wait_for_result(rospy.Duration(duration + 0.5))
+            if not success:
+                rospy.logwarn("轨迹执行超时")
+                return None, 0, True, {}
             
-            # 发布消息
-            self.velocity_pub.publish(vel_msg)
-            
-            # 等待物理引擎更新 (关键参数)
-            rospy.sleep(self.dt * 0.8)  # 需略小于控制周期
+            # 8. 发布轨迹数据用于可视化
+            for i in range(num_points):
+                target_msg = TrajectoryData()
+                target_msg.joint_names = self.joint_names
+                target_msg.positions = [all_positions[j][i] for j in range(len(self.joint_names))]
+                current_velocities = [all_velocities[j][i] for j in range(len(self.joint_names))]
+                target_msg.velocities = current_velocities
                 
-            return True
+                # 计算角加速度
+                current_time = timestamps[i]
+                if self.prev_velocities and i > 0:
+                    dt = current_time - self.prev_time
+                    accelerations = [(v - pv)/dt for v, pv in zip(current_velocities, self.prev_velocities)]
+                else:
+                    accelerations = [0.0]*len(self.joint_names)
+                
+                target_msg.acc = accelerations
+                
+                # 更新力矩
+                target_msg.torques = self.current_joint_efforts.tolist()
+                
+                # 更新时间记录
+                self.prev_velocities = current_velocities
+                self.prev_time = current_time
+                
+                # 发布时间戳和消息
+                target_msg.stamp = rospy.Time.now() + rospy.Duration(current_time)
+                self.traj_pub.publish(target_msg)
+                rospy.sleep(1.0 / 50)
+            
+            
+            # 11. 终止判断
+            done = True
+            
+            return done
             
         except Exception as e:
-            rospy.logerr(f"执行动作时出错: {str(e)}")
-            return False
+            rospy.logerr(f"执行步骤时出错: {str(e)}")
+            return None, 0, True, {}
             
     def control_loop(self):
         """主控制循环"""
         rospy.loginfo("开始控制循环...")
+        step = 0
         
         while not rospy.is_shutdown():
             try:
+
                 self.update_state_from_gazebo()
                 if self.current_state is not None:
                     # 生成动作
@@ -445,8 +531,8 @@ class ArmController:
                         
                     # 执行动作
                     rospy.loginfo(f"执行动作: {action}")
-                    success = self.execute_action(action)
-                    
+                    success = self.execute_action(action, step)
+                    step += 1
                     if not success:
                         rospy.logwarn("动作执行失败")
                         

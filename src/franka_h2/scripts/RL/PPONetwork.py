@@ -1,35 +1,49 @@
 import torch.nn as nn
+import numpy as np
 
-
-import torch.nn as nn
 
 class PPONetwork(nn.Module):
     """PPO策略网络和价值网络定义"""
     def __init__(self, state_dim, action_dim):
         super(PPONetwork, self).__init__()
         
-        # 修正共享特征提取层的维度
+        # 增加网络容量和稳定性
         self.shared_layer = nn.Sequential(
-            nn.Linear(state_dim, 128),  # 24 -> 128
+            nn.Linear(state_dim, 512),
+            nn.LayerNorm(512),  # 添加层归一化
             nn.ReLU(),
-            nn.Linear(128, 64),         # 128 -> 64
-            nn.ReLU()
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.2)
         )
         
-        # 修正Actor网络（策略网络）维度
+        # 策略网络
         self.actor = nn.Sequential(
-            nn.Linear(64, 32),          # 64 -> 32
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
             nn.ReLU(),
-            nn.Linear(32, action_dim),  # 32 -> 7
-            nn.Tanh()                   # 输出[-1,1]范围动作
+            nn.Linear(128, action_dim),
+            nn.Tanh()
         )
         
-        # 修正Critic网络（价值网络）维度
+        # 价值网络
         self.critic = nn.Sequential(
-            nn.Linear(64, 32),          # 64 -> 32
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
             nn.ReLU(),
-            nn.Linear(32, 1)            # 32 -> 1
+            nn.Linear(128, 1)
         )
+        
+        # 初始化权重
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        """使用正交初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
+            module.bias.data.zero_()
 
     def forward(self, state):
         # 添加维度检查和处理

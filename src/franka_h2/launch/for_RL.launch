@@ -47,25 +47,25 @@
 
     <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
 
-    <node 
+    <!-- <node 
         pkg="franka_h2" 
         type="train.py" 
         name="train_RL" 
         output="screen"
-    />
-    <!-- <node 
+    /> -->
+    <node 
         pkg="franka_h2" 
         type="deploy.py" 
         name="deploy_RL" 
         output="screen"
-    /> -->
+    />
 
-    <!-- <node 
+    <node 
         pkg="franka_h2" 
         type="plot_cal.py" 
         name="plot_cal_loss_function" 
         output="screen"
-    /> -->
+    />
 
 
     <param name="rate" value="2500"/>

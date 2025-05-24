@@ -330,8 +330,10 @@ class BiRRTPlanner:
             path = path[::-1]
         
         # 路径平滑
-        # smoothed_path = self.smooth_path(path)
-        smoothed_path = path # 尝试直接使用原路径
+        smoothed_path = self.smooth_path(path)
+        # smoothed_path = path # 尝试直接使用原路径
+
+        print("平滑后的路径：", smoothed_path)
         
         # 为每段路径生成轨迹
         total_points = []
